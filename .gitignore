@@ -3,5 +3,6 @@ __pycache__/
 .vscode/
 *.pth
 *.zip
+*.png
 data/
 EOF
