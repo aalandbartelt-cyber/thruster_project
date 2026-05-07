@@ -1,8 +1,13 @@
 cat > .gitignore << 'EOF'
-__pycache__/
-.vscode/
-*.pth
-*.zip
-*.png
 data/
+outputs/
+__pycache__/
+*.pyc
+*.pth
+*.onnx
+*.npy
+*.png
+*.jpg
+*.jpeg
+.env
 EOF
