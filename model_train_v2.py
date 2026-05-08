@@ -166,6 +166,7 @@ def main():
 
     # -- 快速 sanity check --
     print("\nSanity check:")
+    model.load_state_dict(torch.load(save_path, map_location=device))
     model.eval()
     x_sample, y_sample = train_dataset[0]
     with torch.no_grad():
