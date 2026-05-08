@@ -118,6 +118,8 @@ def main():
     # -- 模型、优化器 --
     model = DualOutputLSTM().to(device)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, verbose=True)
 
     # -- 训练循环 --
     epochs = 100
@@ -148,6 +150,7 @@ def main():
 
         train_loss /= len(train_loader)
         val_loss   /= len(val_loader)
+        scheduler.step(val_loss)
         print(f"Epoch [{epoch+1:3d}/{epochs}]  "
               f"train_loss={train_loss:.6f}  val_loss={val_loss:.6f}")
 
