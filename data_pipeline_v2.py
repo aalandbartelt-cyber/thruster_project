@@ -13,6 +13,7 @@ import pandas as pd
 # ============================================================
 THRUST_SCALE   = 8.0       # thrust / 8.0 → [0, ~0.88]  (实测正常 max≈7N, 全局 outlier=23N→2.9, 安全)
 MFR_MAX        = 2000.0    # mfr   / 2000 → [0, ~0.81]  (实测 max=1612.72, 向上取整留 headroom)
+INPUT_DIM      = 16        # 5 continuous + 11 one-hot
 PRESSURE_MAX   = 25.0      # test_pressure / 25.0 → [0.2, 0.96]  (实测 max=24bar)
 ON_TIME_MAX    = 8.0       # cumulated_on_time / 8.0 → [0, ~0.92]  (实测 max=7.37h)
 THROUGHPUT_MAX = 25.0      # cumulated_throughput / 25.0 → [0, ~0.90]  (实测 max=22.54)
