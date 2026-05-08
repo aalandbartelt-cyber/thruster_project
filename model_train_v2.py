@@ -119,10 +119,14 @@ def main():
     model = DualOutputLSTM().to(device)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+        optimizer, mode='min', factor=0.5, patience=5)
 
     # -- 训练循环 --
     epochs = 100
+    save_dir = "outputs/models/v2"
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, "dual_output_lstm_v2.pth")
+    best_val_loss = float('inf')
     print(f"\nTraining {epochs} epochs...")
     model.train()
     for epoch in range(epochs):
@@ -151,15 +155,12 @@ def main():
         train_loss /= len(train_loader)
         val_loss   /= len(val_loader)
         scheduler.step(val_loss)
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), save_path)
+            print(f"  → best model saved (val_loss={val_loss:.6f})")
         print(f"Epoch [{epoch+1:3d}/{epochs}]  "
               f"train_loss={train_loss:.6f}  val_loss={val_loss:.6f}")
-
-    # -- 保存 --
-    save_dir = "outputs/models/v2"
-    os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, "dual_output_lstm_v2.pth")
-    torch.save(model.state_dict(), save_path)
-    print(f"\nModel saved → {save_path}")
 
     save_meta_info()
 
