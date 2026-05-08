@@ -103,9 +103,9 @@ def load_sequence(filepath, meta_row, seq_len=200):
 
 
 # ============================================================
-# 元信息导出（5/10 训练完成后跑一次，生成 outputs/meta_info.json 供 Z 使用）
+# 元信息导出（5/10 训练完成后跑一次，生成 outputs/predictions/v2/meta_info.json 供 Z 使用）
 # ============================================================
-def save_meta_info(output_path="outputs/meta_info.json"):
+def save_meta_info(output_path="outputs/predictions/v2/meta_info.json"):
     """把归一化系数写成 JSON 供 Z 的评估脚本反归一化使用"""
     import json
     info = {
@@ -172,6 +172,20 @@ def validate():
               f"anomaly_steps={n_anomaly}/{len(labels)}  {status}")
 
     print(f"\n{'All passed' if all_ok else 'NaN detected - check data'}")
+
+    # 额外验证：取 1 个异常文件，确认 labels 非全零
+    df_anom = df_meta[df_meta['anomalous'] == True]
+    for _, row in df_anom.iterrows():
+        fpath = os.path.join(train_dir, row['filename'])
+        if not os.path.exists(fpath):
+            fpath = os.path.join("data/dataset/dataset/test/", row['filename'])
+        if os.path.exists(fpath):
+            _, _, labels_anom = load_sequence(fpath, row)
+            n = (labels_anom != 0).sum()
+            print(f"\n  [anomaly check] {row['filename']}")
+            print(f"    anomaly_steps={n}/{len(labels_anom)}  "
+                  f"{'OK - labels detected' if n > 0 else 'WARN - all zero, check anomaly_code column'}")
+            break
 
 
 if __name__ == "__main__":
