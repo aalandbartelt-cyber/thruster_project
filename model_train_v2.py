@@ -122,7 +122,7 @@ def main():
     model = DualOutputLSTM().to(device)
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5)
+        optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-5)
 
     # -- 训练循环 --
     epochs = 100
