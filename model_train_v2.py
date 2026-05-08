@@ -13,7 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
 
-from data_pipeline_v2 import _build_features, THRUST_SCALE, MFR_MAX, INPUT_DIM
+from data_pipeline_v2 import _build_features, THRUST_SCALE, MFR_MAX, INPUT_DIM, save_meta_info
 
 # ---- Dataset ----
 class ThrusterDataset(Dataset):
@@ -94,6 +94,7 @@ def main():
     df_all = pd.read_csv(metadata_path)
     df_all['filename'] = df_all['filename'].str.strip()
     df_all = df_all[df_all['anomalous'] == False]
+    df_all = df_all[df_all['sn'] <= 12]      # ground-test SN01-SN12 only; SN13-SN24 files not in train_dir
     all_files = df_all['filename'].tolist()
     np.random.seed(42)
     np.random.shuffle(all_files)
@@ -132,6 +133,7 @@ def main():
             pred = model(x)
             loss = dual_loss(pred, y)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             train_loss += loss.item()
 
@@ -155,6 +157,8 @@ def main():
     save_path = os.path.join(save_dir, "dual_output_lstm_v2.pth")
     torch.save(model.state_dict(), save_path)
     print(f"\nModel saved → {save_path}")
+
+    save_meta_info()
 
     # -- 快速 sanity check --
     print("\nSanity check:")
