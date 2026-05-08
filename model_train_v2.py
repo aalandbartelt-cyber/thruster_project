@@ -1,8 +1,8 @@
 """
-model_train_v2.py — 16维输入 + 双输出 LSTM 训练
+model_train_v2.py — 17维输入 + 双输出 LSTM 训练
 M 负责，dev-m 分支
 基于 v1_baseline/model_train.py 改写，核心变更：
-  输入 3→16, 输出 1→2, 损失加权, Dataset 全量读入内存滑动窗口
+  输入 3→17, 输出 1→2, 损失加权, Dataset 全量读入内存滑动窗口
 """
 
 import os

@@ -1,5 +1,5 @@
 """
-data_pipeline_v2.py — 16维输入（5连续 + 11 one-hot） + 双输出预处理
+data_pipeline_v2.py — 17维输入（5连续 + vl + 11 one-hot） + 双输出预处理
 M 负责，dev-m 分支
 接口约定：Z 通过 load_sequence() 和 get_test_mode_list() 获取数据，不重复写预处理逻辑。
 """
@@ -13,7 +13,7 @@ import pandas as pd
 # ============================================================
 THRUST_SCALE   = 8.0       # thrust / 8.0 → [0, ~0.88]  (实测正常 max≈7N, 全局 outlier=23N→2.9, 安全)
 MFR_MAX        = 2000.0    # mfr   / 2000 → [0, ~0.81]  (实测 max=1612.72, 向上取整留 headroom)
-INPUT_DIM      = 16        # 5 continuous + 11 one-hot
+INPUT_DIM      = 17        # 5 continuous + vl + 11 one-hot
 PRESSURE_MAX   = 25.0      # test_pressure / 25.0 → [0.2, 0.96]  (实测 max=24bar)
 ON_TIME_MAX    = 8.0       # cumulated_on_time / 8.0 → [0, ~0.92]  (实测 max=7.37h)
 THROUGHPUT_MAX = 25.0      # cumulated_throughput / 25.0 → [0, ~0.90]  (实测 max=22.54)
@@ -50,6 +50,7 @@ def encode_test_mode(mode_str):
 def _build_features(df_slice, meta_row):
     """给定 DataFrame 切片（已按窗口截取），返回 x, y, labels"""
     ton        = df_slice['ton'].values.astype(np.float32)
+    vl         = df_slice['vl'].values.astype(np.float32)           # already in [0,1]
     pressure   = np.full_like(ton, meta_row['test_pressure']        / PRESSURE_MAX)
     on_time    = np.full_like(ton, meta_row['cumulated_on_time']    / ON_TIME_MAX)
     throughput = np.full_like(ton, meta_row['cumulated_throughput'] / THROUGHPUT_MAX)
@@ -59,7 +60,7 @@ def _build_features(df_slice, meta_row):
     mode_tiled  = np.tile(mode_onehot, (len(ton), 1))              # (T, 11)
 
     x = np.column_stack([
-        ton, pressure, on_time, throughput, pulses,                 # 5 维
+        ton, vl, pressure, on_time, throughput, pulses,             # 6 维
         mode_tiled,                                                 # 11 维
     ]).astype(np.float32)
 
@@ -97,7 +98,7 @@ def load_sequence(filepath, meta_row, seq_len=200):
 
     返回
     ----
-    x      : np.ndarray  [seq_len, 16]
+    x      : np.ndarray  [seq_len, 17]
     y      : np.ndarray  [seq_len, 2]
     labels : np.ndarray  [seq_len]
     """
@@ -128,7 +129,7 @@ def save_meta_info(output_path="outputs/predictions/v2/meta_info.json"):
         "throughput_max": THROUGHPUT_MAX,
         "pulses_max":     PULSES_MAX,
         "test_mode_list": TEST_MODE_LIST,
-        "input_dim":      16,
+        "input_dim":      17,
         "output_dim":     2,
         "seq_len":        200,
     }
