@@ -64,14 +64,17 @@ class ThrusterDataset(Dataset):
 
 # ---- 模型 ----
 class DualOutputLSTM(nn.Module):
-    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2):
+    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2, dropout=0.25):
         super().__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers,
+                            batch_first=True, dropout=dropout)
+        self.dropout = nn.Dropout(0.15)
         self.fc = nn.Linear(hidden_dim, 2)
 
     def forward(self, x):
         self.lstm.flatten_parameters()
         out, _ = self.lstm(x)
+        out = self.dropout(out)
         return self.fc(out)
 
 
@@ -117,7 +120,7 @@ def main():
 
     # -- 模型、优化器 --
     model = DualOutputLSTM().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=5)
 
@@ -127,7 +130,9 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, "dual_output_lstm_v2.pth")
     best_val_loss = float('inf')
-    print(f"\nTraining {epochs} epochs...")
+    early_stop_patience = 20
+    epochs_no_improve = 0
+    print(f"\nTraining {epochs} epochs... (early stop patience={early_stop_patience})")
     model.train()
     for epoch in range(epochs):
         # --- train ---
@@ -158,9 +163,16 @@ def main():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(model.state_dict(), save_path)
+            epochs_no_improve = 0
             print(f"  → best model saved (val_loss={val_loss:.6f})")
+        else:
+            epochs_no_improve += 1
         print(f"Epoch [{epoch+1:3d}/{epochs}]  "
               f"train_loss={train_loss:.6f}  val_loss={val_loss:.6f}")
+        if epochs_no_improve >= early_stop_patience:
+            print(f"\nEarly stopping at epoch {epoch+1} "
+                  f"(no improvement for {early_stop_patience} epochs)")
+            break
 
     save_meta_info()
 
