@@ -44,60 +44,71 @@ def encode_test_mode(mode_str):
 
 
 # ============================================================
-# 核心 API：load_sequence()
+# 内部：从 DataFrame 切片构建特征（load_sequence 和 load_sequence_window 共用）
 # ============================================================
-def load_sequence(filepath, meta_row, seq_len=200):
-    """
-    加载单个 CSV 文件，构建 16 维输入 + 2 维输出 + 异常标签。
-
-    参数
-    ----
-    filepath : str          CSV 文件的完整路径
-    meta_row : pd.Series    metadata.csv 中该文件对应的行
-    seq_len  : int          截断/填充长度
-
-    返回
-    ----
-    x      : np.ndarray  [seq_len, 16]  5 连续 + 11 one-hot
-    y      : np.ndarray  [seq_len, 2]   [thrust/THRUST_SCALE, mfr/MFR_MAX]
-    labels : np.ndarray  [seq_len]      anomaly_code, 0=正常, 非0=异常, NaN已填0
-    """
-    df = pd.read_csv(filepath)
-
-    # -- 5 个连续特征 --
-    ton        = df['ton'].values.astype(np.float32)
+def _build_features(df_slice, meta_row):
+    """给定 DataFrame 切片（已按窗口截取），返回 x, y, labels"""
+    ton        = df_slice['ton'].values.astype(np.float32)
     pressure   = np.full_like(ton, meta_row['test_pressure']        / PRESSURE_MAX)
     on_time    = np.full_like(ton, meta_row['cumulated_on_time']    / ON_TIME_MAX)
     throughput = np.full_like(ton, meta_row['cumulated_throughput'] / THROUGHPUT_MAX)
     pulses     = np.full_like(ton, meta_row['cumulated_pulses']     / PULSES_MAX)
 
-    # -- 11 维 one-hot (每时间步重复) --
     mode_onehot = encode_test_mode(meta_row['test_mode'])          # (11,)
     mode_tiled  = np.tile(mode_onehot, (len(ton), 1))              # (T, 11)
 
-    # -- 拼接 16 维输入 --
     x = np.column_stack([
         ton, pressure, on_time, throughput, pulses,                 # 5 维
         mode_tiled,                                                 # 11 维
     ]).astype(np.float32)
 
-    # -- 双输出标签 --
-    thrust_norm = df['thrust'].values.astype(np.float32) / THRUST_SCALE
-    mfr_norm    = df['mfr'].values.astype(np.float32)    / MFR_MAX
+    thrust_norm = df_slice['thrust'].values.astype(np.float32) / THRUST_SCALE
+    mfr_norm    = df_slice['mfr'].values.astype(np.float32)    / MFR_MAX
     y = np.column_stack([thrust_norm, mfr_norm]).astype(np.float32)
 
-    # -- 异常标签（供 Z 的 model_anomaly_eval.py 用作 ground truth）--
-    raw_labels = df['anomaly_code'].values
+    raw_labels = df_slice['anomaly_code'].values
     labels = np.nan_to_num(raw_labels, nan=0.0).astype(np.int32)
 
-    # -- 截断 / 填充到固定长度 --
-    if len(x) > seq_len:
-        x, y, labels = x[:seq_len], y[:seq_len], labels[:seq_len]
-    else:
+    return x, y, labels
+
+
+# ============================================================
+# 核心 API
+# ============================================================
+def load_sequence_window(filepath, meta_row, start=0, seq_len=200):
+    """
+    从指定起点 start 读取 CSV 窗口，不做截断/填充。
+    供滑动窗口 Dataset 使用，Dataset 保证 T >= seq_len。
+
+    返回
+    ----
+    x, y, labels  各自长度 = min(seq_len, T - start)
+    """
+    df = pd.read_csv(filepath)
+    end = min(start + seq_len, len(df))
+    return _build_features(df.iloc[start:end], meta_row)
+
+
+def load_sequence(filepath, meta_row, seq_len=200):
+    """
+    加载完整 CSV 文件前 seq_len 步，不足则零填充。
+    向后兼容 v1 风格的固定长度接口。
+
+    返回
+    ----
+    x      : np.ndarray  [seq_len, 16]
+    y      : np.ndarray  [seq_len, 2]
+    labels : np.ndarray  [seq_len]
+    """
+    x, y, labels = load_sequence_window(filepath, meta_row, start=0, seq_len=seq_len)
+
+    if len(x) < seq_len:
         pad_len = seq_len - len(x)
         x      = np.pad(x,      ((0, pad_len), (0, 0)), mode='constant')
         y      = np.pad(y,      ((0, pad_len), (0, 0)), mode='constant')
         labels = np.pad(labels, (0, pad_len),            mode='constant')
+    elif len(x) > seq_len:
+        x, y, labels = x[:seq_len], y[:seq_len], labels[:seq_len]
 
     return x, y, labels
 
@@ -173,19 +184,30 @@ def validate():
 
     print(f"\n{'All passed' if all_ok else 'NaN detected - check data'}")
 
-    # 额外验证：取 1 个异常文件，确认 labels 非全零
+    # 额外验证：找异常在前 200 步以内的文件，确认 labels 提取正确
     df_anom = df_meta[df_meta['anomalous'] == True]
+    found_with_labels = False
     for _, row in df_anom.iterrows():
         fpath = os.path.join(train_dir, row['filename'])
         if not os.path.exists(fpath):
             fpath = os.path.join("data/dataset/dataset/test/", row['filename'])
-        if os.path.exists(fpath):
-            _, _, labels_anom = load_sequence(fpath, row)
-            n = (labels_anom != 0).sum()
+        if not os.path.exists(fpath):
+            continue
+        _, _, labels_anom = load_sequence(fpath, row)
+        n = (labels_anom != 0).sum()
+        if n > 0:
             print(f"\n  [anomaly check] {row['filename']}")
-            print(f"    anomaly_steps={n}/{len(labels_anom)}  "
-                  f"{'OK - labels detected' if n > 0 else 'WARN - all zero, check anomaly_code column'}")
+            print(f"    anomaly_steps={n}/{len(labels_anom)}  OK - labels detected")
+            found_with_labels = True
             break
+        else:
+            print(f"\n  [anomaly check] {row['filename']}")
+            print(f"    anomaly_steps=0/{len(labels_anom)}  "
+                  f"skipped (anomaly beyond step 200, trying next file...)")
+
+    if not found_with_labels:
+        print("\n  [anomaly check] WARN: no file with anomaly in first 200 steps found "
+              "- check anomaly_code column")
 
 
 if __name__ == "__main__":
