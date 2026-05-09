@@ -392,7 +392,7 @@ def main():
     if v1_rmse is not None:
         print(f"  v1 thrust RMSE: {v1_rmse:.4f} N  (comparison)")
     print(f"  接口文件: {output_dir}/")
-    print(f"  图表: {isp_fig_path}")
+    print(f"  图表: {fig_dir}/")
     print(f"{'='*60}")
 
 
