@@ -218,16 +218,15 @@ def main():
     else:
         print(f"\n  [INFO] v1 model not found at {v1_model_path}, skipping comparison")
 
-    # ── Isp 分析 ──
+    # ── 逐 mode 出图：thrust + mfr + Isp 三联 ──
     print(f"\n{'='*60}")
-    print(f"  Isp = thrust / (mfr × g0)  分析")
+    print(f"  逐 test_mode 出图")
     print(f"{'='*60}")
+    fig_dir = "outputs/figures/v2"
+    os.makedirs(fig_dir, exist_ok=True)
+
     sample_files = df_normal.groupby('test_mode').first().reset_index()
-    fig, axes = plt.subplots(3, 4, figsize=(20, 12))
-    axes = axes.flatten()
-    for i, (_, row) in enumerate(sample_files.iterrows()):
-        if i >= 11:
-            break
+    for _, row in sample_files.iterrows():
         fpath = os.path.join(test_dir, row['filename'])
         df = pd.read_csv(fpath)
         start = len(df) // 3
@@ -240,25 +239,85 @@ def main():
         mfr_pred = pred[:, 1] * MFR_MAX
         thrust_true = y[:, 0] * THRUST_SCALE
         mfr_true = y[:, 1] * MFR_MAX
-
         isp_pred = thrust_pred / (mfr_pred * G0)
         isp_true = thrust_true / (mfr_true * G0)
 
-        ax = axes[i]
-        ax.plot(isp_true, label='Actual Isp', color='blue', alpha=0.6)
-        ax.plot(isp_pred, label='Predicted Isp', color='red', alpha=0.6, linestyle='--')
-        ax.set_title(f"{row['test_mode']} ({row['sn']})", fontsize=9)
-        ax.set_ylabel("Isp (s)")
-        ax.legend(fontsize=7)
+        mode = row['test_mode']
+        sn = row['sn']
+
+        fig, axes = plt.subplots(3, 1, figsize=(16, 10))
+
+        # thrust
+        ax = axes[0]
+        ax.plot(thrust_true, label='Actual', color='blue', alpha=0.7, linewidth=1.2)
+        ax.plot(thrust_pred, label='Predicted', color='red', alpha=0.7, linestyle='--', linewidth=1.2)
+        t_rmse = np.sqrt(np.mean((thrust_true - thrust_pred)**2))
+        ax.text(0.02, 0.95, f"RMSE={t_rmse:.4f} N", transform=ax.transAxes, fontsize=10,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        ax.set_ylabel("Thrust (N)")
+        ax.set_title(f"Thrust  —  {mode}  ({sn})", fontsize=11, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=9)
         ax.grid(True, linestyle=':', alpha=0.5)
+
+        # mfr
+        ax = axes[1]
+        ax.plot(mfr_true, label='Actual', color='blue', alpha=0.7, linewidth=1.2)
+        ax.plot(mfr_pred, label='Predicted', color='red', alpha=0.7, linestyle='--', linewidth=1.2)
+        m_rmse = np.sqrt(np.mean((mfr_true - mfr_pred)**2))
+        ax.text(0.02, 0.95, f"RMSE={m_rmse:.1f} mg/s", transform=ax.transAxes, fontsize=10,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        ax.set_ylabel("MFR (mg/s)")
+        ax.set_title(f"MFR  —  {mode}  ({sn})", fontsize=11, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=9)
+        ax.grid(True, linestyle=':', alpha=0.5)
+
+        # isp
+        ax = axes[2]
+        ax.plot(isp_true, label='Actual Isp', color='blue', alpha=0.7, linewidth=1.2)
+        ax.plot(isp_pred, label='Predicted Isp', color='red', alpha=0.7, linestyle='--', linewidth=1.2)
+        i_rmse = np.sqrt(np.mean((isp_true - isp_pred)**2))
+        ax.text(0.02, 0.95, f"RMSE={i_rmse:.2f} s", transform=ax.transAxes, fontsize=10,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        ax.set_xlabel("Time Step")
+        ax.set_ylabel("Isp (s)")
+        ax.set_title(f"Isp = thrust / (mfr × g0)  —  {mode}  ({sn})", fontsize=11, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=9)
+        ax.grid(True, linestyle=':', alpha=0.5)
+
+        plt.tight_layout()
+        fig_path = os.path.join(fig_dir, f"pred_{mode}.png")
+        plt.savefig(fig_path, dpi=300)
+        plt.close()
+        print(f"  {fig_path}")
+
+    # 额外：v1 vs v2 thrust 对比图（各 mode 拼一张汇总）
+    fig, axes = plt.subplots(3, 4, figsize=(20, 12))
+    axes = axes.flatten()
+    for i, (_, row) in enumerate(sample_files.iterrows()):
+        if i >= 11:
+            break
+        fpath = os.path.join(test_dir, row['filename'])
+        df = pd.read_csv(fpath)
+        start = len(df) // 3
+        x, y, _ = _build_features(df.iloc[start:start + seq_len], row)
+        x_t = torch.from_numpy(x).unsqueeze(0).to(device)
+        with torch.no_grad():
+            pred = model(x_t).squeeze(0).cpu().numpy()
+        thrust_pred = pred[:, 0] * THRUST_SCALE
+        thrust_true = y[:, 0] * THRUST_SCALE
+        ax = axes[i]
+        ax.plot(thrust_true, label='Actual', color='blue', alpha=0.5, linewidth=0.8)
+        ax.plot(thrust_pred, label='v2 Pred', color='red', alpha=0.7, linestyle='--', linewidth=0.8)
+        ax.set_title(f"{row['test_mode']}", fontsize=9)
+        ax.legend(fontsize=7)
+        ax.grid(True, linestyle=':', alpha=0.4)
     axes[11].set_visible(False)
-    plt.suptitle("v2 DualOutput Attention-LSTM: Isp Prediction by Test Mode", fontsize=14, fontweight='bold')
+    plt.suptitle("v2 Thrust Prediction by Test Mode", fontsize=14, fontweight='bold')
     plt.tight_layout()
-    isp_fig_path = "outputs/figures/v2/isp_by_mode.png"
-    os.makedirs(os.path.dirname(isp_fig_path), exist_ok=True)
-    plt.savefig(isp_fig_path, dpi=300)
+    summary_path = os.path.join(fig_dir, "thrust_summary_11mode.png")
+    plt.savefig(summary_path, dpi=300)
     plt.close()
-    print(f"  Isp figure saved → {isp_fig_path}")
+    print(f"  {summary_path}")
 
     # ── 生成接口文件供 Z 使用 ──
     print(f"\n{'='*60}")
