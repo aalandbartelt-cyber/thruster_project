@@ -1,8 +1,8 @@
 """
-model_train_v2.py — 17维输入 + 双输出 LSTM 训练
+model_train_v2.py — 17维输入 + 双输出 Attention-LSTM 训练
 M 负责，dev-m 分支
 基于 v1_baseline/model_train.py 改写，核心变更：
-  输入 3→17, 输出 1→2, 损失加权, Dataset 全量读入内存滑动窗口
+  输入 3→17, 输出 1→2, 损失加权, self-attention + LSTM 混合架构
 """
 
 import os
@@ -64,10 +64,12 @@ class ThrusterDataset(Dataset):
 
 # ---- 模型 ----
 class DualOutputLSTM(nn.Module):
-    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2):
+    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2, n_heads=4):
         super().__init__()
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers,
                             batch_first=True)
+        self.attention = nn.MultiheadAttention(hidden_dim, n_heads,
+                                               batch_first=True)
         self.ln = nn.LayerNorm(hidden_dim)
         self.fc = nn.Sequential(
             nn.Linear(hidden_dim, 128),
@@ -78,9 +80,10 @@ class DualOutputLSTM(nn.Module):
 
     def forward(self, x):
         self.lstm.flatten_parameters()
-        out, _ = self.lstm(x)
-        out = self.ln(out)
-        return self.fc(out)
+        out, _ = self.lstm(x)                    # [B, T, 256]
+        attn_out, _ = self.attention(out, out, out)  # self-attention
+        out = self.ln(out + attn_out)            # residual + norm
+        return self.fc(out)                      # [B, T, 2]
 
 
 # ---- 加权损失 ----
