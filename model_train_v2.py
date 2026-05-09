@@ -64,17 +64,22 @@ class ThrusterDataset(Dataset):
 
 # ---- 模型 ----
 class DualOutputLSTM(nn.Module):
-    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2, dropout=0.1):
+    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2):
         super().__init__()
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers,
-                            batch_first=True, dropout=dropout)
-        self.dropout = nn.Dropout(0.05)
-        self.fc = nn.Linear(hidden_dim, 2)
+                            batch_first=True)
+        self.ln = nn.LayerNorm(hidden_dim)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.05),
+            nn.Linear(128, 2),
+        )
 
     def forward(self, x):
         self.lstm.flatten_parameters()
         out, _ = self.lstm(x)
-        out = self.dropout(out)
+        out = self.ln(out)
         return self.fc(out)
 
 
