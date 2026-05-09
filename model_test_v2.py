@@ -121,11 +121,11 @@ def main():
             all_mfr_mae.append(mean_m_mae)
 
             if mode in mode_metrics:
-                mode_metrics[m]['thrust_rmse'].append(mean_t_rmse)
-                mode_metrics[m]['thrust_mae'].append(mean_t_mae)
-                mode_metrics[m]['mfr_rmse'].append(mean_m_rmse)
-                mode_metrics[m]['mfr_mae'].append(mean_m_mae)
-                mode_metrics[m]['count'] += 1
+                mode_metrics[mode]['thrust_rmse'].append(mean_t_rmse)
+                mode_metrics[mode]['thrust_mae'].append(mean_t_mae)
+                mode_metrics[mode]['mfr_rmse'].append(mean_m_rmse)
+                mode_metrics[mode]['mfr_mae'].append(mean_m_mae)
+                mode_metrics[mode]['count'] += 1
 
     # ── 全局指标 ──
     print(f"\n{'='*60}")
