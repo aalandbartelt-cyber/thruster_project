@@ -64,11 +64,11 @@ class ThrusterDataset(Dataset):
 
 # ---- 模型 ----
 class DualOutputLSTM(nn.Module):
-    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2, dropout=0.25):
+    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2, dropout=0.1):
         super().__init__()
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers,
                             batch_first=True, dropout=dropout)
-        self.dropout = nn.Dropout(0.15)
+        self.dropout = nn.Dropout(0.05)
         self.fc = nn.Linear(hidden_dim, 2)
 
     def forward(self, x):
@@ -120,7 +120,7 @@ def main():
 
     # -- 模型、优化器 --
     model = DualOutputLSTM().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=2e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-5)
 
