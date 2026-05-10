@@ -10,7 +10,7 @@ M 负责，dev-m 分支
   5. 生成接口文件供 Z 使用（predictions_dual.npy, targets_dual.npy, anomaly_labels.npy）
 """
 
-import os, json
+import os, json, sys
 import torch
 import torch.nn as nn
 import numpy as np
@@ -80,7 +80,12 @@ def main():
     mode_metrics = {m: {'thrust_rmse': [], 'thrust_mae': [], 'mfr_rmse': [], 'mfr_mae': [], 'count': 0}
                     for m in TEST_MODE_LIST}
 
-    for _, row in df_normal.iterrows():
+    print(f"  Starting per-file evaluation on {len(df_normal)} files...")
+    sys.stdout.flush()
+    for file_idx, (_, row) in enumerate(df_normal.iterrows()):
+        if file_idx % 100 == 0:
+            print(f"  [{file_idx}/{len(df_normal)}] evaluating...", end="
+")
         fpath = os.path.join(test_dir, row['filename'])
         try:
             df = pd.read_csv(fpath)
@@ -129,6 +134,7 @@ def main():
                 mode_metrics[mode]['mfr_mae'].append(mean_m_mae)
                 mode_metrics[mode]['count'] += 1
 
+    print()  # finish progress line
     # ── 全局指标 ──
     print(f"\n{'='*60}")
     print(f"  v2 DualOutput Attention-LSTM — 测试集评估")
@@ -138,6 +144,7 @@ def main():
     print(f"  Thrust  MAE : {np.mean(all_thrust_mae):.4f} N")
     print(f"  MFR     RMSE: {np.mean(all_mfr_rmse):.1f} mg/s")
     print(f"  MFR     MAE : {np.mean(all_mfr_mae):.1f} mg/s")
+    sys.stdout.flush()
     print(f"{'='*60}")
 
     # ── 按 test_mode 分项 ──
@@ -337,7 +344,11 @@ def main():
     all_labels = []
 
     # 正常文件
+    n_iface = len(df_normal) + len(df_meta[df_meta['anomalous'] == True])
+    iface_done = 0
     for _, row in df_normal.iterrows():
+        if iface_done % 200 == 0:
+            print(f"  [{iface_done}/{n_iface}] generating interface files...", end="\r")
         fpath = os.path.join(test_dir, row['filename'])
         try:
             df = pd.read_csv(fpath)
@@ -354,11 +365,14 @@ def main():
         all_preds.append(pred)
         all_targets.append(y)
         all_labels.append(labels)
+        iface_done += 1
 
     # 异常文件
     df_anomalous = df_meta[df_meta['anomalous'] == True].copy()
     df_anomalous = df_anomalous[df_anomalous['filename'].isin(existing_files)]
     for _, row in df_anomalous.iterrows():
+        if iface_done % 200 == 0:
+            print(f"  [{iface_done}/{n_iface}] generating interface files...", end="\r")
         fpath = os.path.join(test_dir, row['filename'])
         try:
             df = pd.read_csv(fpath)
@@ -375,7 +389,9 @@ def main():
         all_preds.append(pred)
         all_targets.append(y)
         all_labels.append(labels)
+        iface_done += 1
 
+    print(f"  [{iface_done}/{n_iface}] generating interface files... done")
     preds_stack = np.stack(all_preds)    # [N, 200, 2]
     targets_stack = np.stack(all_targets)  # [N, 200, 2]
     labels_stack = np.stack(all_labels)   # [N, 200]
