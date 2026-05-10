@@ -1,8 +1,11 @@
 """
-model_train_v2.py — 17维输入 + 双输出 Attention-LSTM 训练
+model_train_v2.py — 17维输入 + SN embedding + 双输出 Attention-LSTM 训练
 M 负责，dev-m 分支
-基于 v1_baseline/model_train.py 改写，核心变更：
-  输入 3→17, 输出 1→2, 损失加权, self-attention + LSTM 混合架构
+
+v2.1 改进：
+  - 加入 SN embedding (25 vocab × 8 dim)，区分不同推进器制造差异
+  - 训练时 12% 概率 mask 为 UNKNOWN token，训练未见 SN 的泛化能力
+  - 损失函数加入方差匹配项 (w_std=0.08)，缓解 MSE 过平滑
 """
 
 import os
@@ -13,7 +16,8 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
 
-from data_pipeline_v2 import _build_features, THRUST_SCALE, MFR_MAX, INPUT_DIM, save_meta_info
+from data_pipeline_v2 import (_build_features, THRUST_SCALE, MFR_MAX, INPUT_DIM,
+                               SN_COUNT, UNKNOWN_SN_ID, SN_EMB_DIM, save_meta_info)
 
 # ---- Dataset ----
 class ThrusterDataset(Dataset):
@@ -45,8 +49,8 @@ class ThrusterDataset(Dataset):
                     skipped_short += 1
                     continue
                 for start in range(0, T - seq_len + 1, stride):
-                    x, y, _ = _build_features(df.iloc[start:start + seq_len], row)
-                    self.samples.append((x, y))
+                    x, y, _, sn_id = _build_features(df.iloc[start:start + seq_len], row)
+                    self.samples.append((x, y, sn_id))
                 loaded += 1
             except Exception:
                 continue
@@ -58,15 +62,21 @@ class ThrusterDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        x, y = self.samples[idx]
-        return torch.from_numpy(x), torch.from_numpy(y)
+        x, y, sn_id = self.samples[idx]
+        return torch.from_numpy(x), torch.from_numpy(y), sn_id
 
 
 # ---- 模型 ----
 class DualOutputLSTM(nn.Module):
-    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2, n_heads=4):
+    def __init__(self, input_dim=INPUT_DIM, hidden_dim=256, num_layers=2, n_heads=4,
+                 sn_vocab=SN_COUNT + 1, sn_emb_dim=SN_EMB_DIM):
+        """
+        sn_vocab: SN_COUNT + 1 = 25 (0–23 = SN01–SN24, 24 = UNKNOWN)
+        sn_emb_dim: 8, SN embedding 拼接到每个时间步的特征上
+        """
         super().__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers,
+        self.sn_embedding = nn.Embedding(sn_vocab, sn_emb_dim)
+        self.lstm = nn.LSTM(input_dim + sn_emb_dim, hidden_dim, num_layers,
                             batch_first=True)
         self.attention = nn.MultiheadAttention(hidden_dim, n_heads,
                                                batch_first=True)
@@ -78,7 +88,12 @@ class DualOutputLSTM(nn.Module):
             nn.Linear(128, 2),
         )
 
-    def forward(self, x):
+    def forward(self, x, sn_ids):
+        # x: [B, T, 17], sn_ids: [B]
+        sn_emb = self.sn_embedding(sn_ids)           # [B, sn_emb_dim]
+        sn_emb = sn_emb.unsqueeze(1).expand(-1, x.size(1), -1)  # [B, T, sn_emb_dim]
+        x = torch.cat([x, sn_emb], dim=-1)           # [B, T, 17+8]
+
         self.lstm.flatten_parameters()
         out, _ = self.lstm(x)                    # [B, T, 256]
         attn_out, _ = self.attention(out, out, out)  # self-attention
@@ -86,11 +101,20 @@ class DualOutputLSTM(nn.Module):
         return self.fc(out)                      # [B, T, 2]
 
 
-# ---- 加权损失 ----
-def dual_loss(pred, target, w_thrust=0.7, w_mfr=0.3):
+# ---- 加权损失 + 方差匹配（缓解 MSE 过平滑） ----
+def dual_loss(pred, target, w_thrust=0.7, w_mfr=0.3, w_std=0.08):
     mse = nn.MSELoss()
-    return w_thrust * mse(pred[:, :, 0], target[:, :, 0]) + \
-           w_mfr    * mse(pred[:, :, 1], target[:, :, 1])
+    mse_loss = (w_thrust * mse(pred[:, :, 0], target[:, :, 0]) +
+                w_mfr    * mse(pred[:, :, 1], target[:, :, 1]))
+
+    # 每个样本时间维度的标准差匹配 —— 惩罚 "预测太平滑"
+    pred_std_thrust = pred[:, :, 0].std(dim=1)   # [B]
+    true_std_thrust = target[:, :, 0].std(dim=1)  # [B]
+    pred_std_mfr    = pred[:, :, 1].std(dim=1)    # [B]
+    true_std_mfr    = target[:, :, 1].std(dim=1)  # [B]
+    std_loss = mse(pred_std_thrust, true_std_thrust) + mse(pred_std_mfr, true_std_mfr)
+
+    return mse_loss + w_std * std_loss
 
 
 # ---- 主训练流程 ----
@@ -134,35 +158,44 @@ def main():
 
     # -- 训练循环 --
     epochs = 100
+    sn_mask_prob = 0.12  # 12% 概率替换为 UNKNOWN，训练模型在未见 SN 上的泛化
     save_dir = "outputs/models/v2"
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, "dual_output_lstm_v2.pth")
     best_val_loss = float('inf')
     early_stop_patience = 20
     epochs_no_improve = 0
-    print(f"\nTraining {epochs} epochs... (early stop patience={early_stop_patience})")
-    model.train()
+    print(f"\nTraining {epochs} epochs... (early stop patience={early_stop_patience}, "
+          f"SN mask prob={sn_mask_prob})")
     for epoch in range(epochs):
         # --- train ---
         model.train()
         train_loss = 0
-        for x, y in train_loader:
+        for x, y, sn_ids in train_loader:
             x, y = x.to(device), y.to(device)
+            sn_ids = sn_ids.to(device)
+
+            # 随机将部分 SN 替换为 UNKNOWN，训练 embedding 24（未知推进器）
+            mask = torch.rand(sn_ids.size(0), device=device) < sn_mask_prob
+            sn_ids = sn_ids.clone()
+            sn_ids[mask] = UNKNOWN_SN_ID
+
             optimizer.zero_grad()
-            pred = model(x)
+            pred = model(x, sn_ids)
             loss = dual_loss(pred, y)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             train_loss += loss.item()
 
-        # --- val ---
+        # --- val（不做 mask，使用真实 SN id）---
         model.eval()
         val_loss = 0
         with torch.no_grad():
-            for x, y in val_loader:
+            for x, y, sn_ids in val_loader:
                 x, y = x.to(device), y.to(device)
-                pred = model(x)
+                sn_ids = sn_ids.to(device)
+                pred = model(x, sn_ids)
                 val_loss += dual_loss(pred, y).item()
 
         train_loss /= len(train_loader)
@@ -188,10 +221,11 @@ def main():
     print("\nSanity check:")
     model.load_state_dict(torch.load(save_path, map_location=device))
     model.eval()
-    x_sample, y_sample = train_dataset[0]
+    x_sample, y_sample, sn_sample = train_dataset[0]
     with torch.no_grad():
-        pred = model(x_sample.unsqueeze(0).to(device))
-    print(f"  input:  {x_sample.shape}  →  output: {pred.squeeze(0).shape}")
+        pred = model(x_sample.unsqueeze(0).to(device),
+                     torch.tensor([sn_sample], device=device))
+    print(f"  input:  {x_sample.shape}  + sn_id={sn_sample}  →  output: {pred.squeeze(0).shape}")
     print(f"  target thrust range: [{y_sample[:, 0].min():.3f}, {y_sample[:, 0].max():.3f}] "
           f"(x{THRUST_SCALE}=[{y_sample[:, 0].min()*THRUST_SCALE:.1f}, {y_sample[:, 0].max()*THRUST_SCALE:.1f}] N)")
     print(f"  target mfr    range: [{y_sample[:, 1].min():.3f}, {y_sample[:, 1].max():.3f}] "

@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from data_pipeline_v2 import (
     load_sequence, _build_features,
     THRUST_SCALE, MFR_MAX, INPUT_DIM, TEST_MODE_LIST,
+    UNKNOWN_SN_ID, SN_EMB_DIM,
     save_meta_info,
 )
 from model_train_v2 import DualOutputLSTM
@@ -96,10 +97,11 @@ def main():
         file_mfr_mae = []
 
         for start in range(0, T - seq_len + 1, stride):
-            x, y, _ = _build_features(df.iloc[start:start + seq_len], row)
+            x, y, _, _sn = _build_features(df.iloc[start:start + seq_len], row)
             x_t = torch.from_numpy(x).unsqueeze(0).to(device)
+            sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
             with torch.no_grad():
-                pred = model(x_t).squeeze(0).cpu().numpy()  # [200, 2]
+                pred = model(x_t, sn_t).squeeze(0).cpu().numpy()  # [200, 2]
 
             t_rmse, t_mae = compute_metrics(pred[:, 0], y[:, 0], THRUST_SCALE)
             m_rmse, m_mae = compute_metrics(pred[:, 1], y[:, 1], MFR_MAX)
@@ -190,10 +192,11 @@ def main():
 
             for start in range(0, T - seq_len + 1, stride):
                 # v2
-                x_v2, y_v2, _ = _build_features(df.iloc[start:start + seq_len], row)
+                x_v2, y_v2, _, _sn = _build_features(df.iloc[start:start + seq_len], row)
                 x_t = torch.from_numpy(x_v2).unsqueeze(0).to(device)
+                sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
                 with torch.no_grad():
-                    pred_v2 = model(x_t).squeeze(0).cpu().numpy()
+                    pred_v2 = model(x_t, sn_t).squeeze(0).cpu().numpy()
                 v2_rmse, _ = compute_metrics(pred_v2[:, 0], y_v2[:, 0], THRUST_SCALE)
                 v2_on_same.append(v2_rmse)
 
@@ -230,17 +233,19 @@ def main():
         fpath = os.path.join(test_dir, row['filename'])
         df = pd.read_csv(fpath)
         start = len(df) // 3
-        x, y, _ = _build_features(df.iloc[start:start + seq_len], row)
+        x, y, _, _sn = _build_features(df.iloc[start:start + seq_len], row)
         x_t = torch.from_numpy(x).unsqueeze(0).to(device)
+        sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
         with torch.no_grad():
-            pred = model(x_t).squeeze(0).cpu().numpy()
+            pred = model(x_t, sn_t).squeeze(0).cpu().numpy()
 
         thrust_pred = pred[:, 0] * THRUST_SCALE
         mfr_pred = pred[:, 1] * MFR_MAX
         thrust_true = y[:, 0] * THRUST_SCALE
         mfr_true = y[:, 1] * MFR_MAX
-        isp_pred = thrust_pred / (mfr_pred * G0)
-        isp_true = thrust_true / (mfr_true * G0)
+        eps = 1e-8
+        isp_pred = thrust_pred / (mfr_pred * G0 + eps)
+        isp_true = thrust_true / (mfr_true * G0 + eps)
 
         mode = row['test_mode']
         sn = row['sn']
@@ -299,10 +304,11 @@ def main():
         fpath = os.path.join(test_dir, row['filename'])
         df = pd.read_csv(fpath)
         start = len(df) // 3
-        x, y, _ = _build_features(df.iloc[start:start + seq_len], row)
+        x, y, _, _sn = _build_features(df.iloc[start:start + seq_len], row)
         x_t = torch.from_numpy(x).unsqueeze(0).to(device)
+        sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
         with torch.no_grad():
-            pred = model(x_t).squeeze(0).cpu().numpy()
+            pred = model(x_t, sn_t).squeeze(0).cpu().numpy()
         thrust_pred = pred[:, 0] * THRUST_SCALE
         thrust_true = y[:, 0] * THRUST_SCALE
         ax = axes[i]
@@ -340,10 +346,11 @@ def main():
         T = len(df)
         if T < seq_len:
             continue
-        x, y, labels = _build_features(df.iloc[:seq_len], row)
+        x, y, labels, _sn = _build_features(df.iloc[:seq_len], row)
         x_t = torch.from_numpy(x).unsqueeze(0).to(device)
+        sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
         with torch.no_grad():
-            pred = model(x_t).squeeze(0).cpu().numpy()
+            pred = model(x_t, sn_t).squeeze(0).cpu().numpy()
         all_preds.append(pred)
         all_targets.append(y)
         all_labels.append(labels)
@@ -360,10 +367,11 @@ def main():
         T = len(df)
         if T < seq_len:
             continue
-        x, y, labels = _build_features(df.iloc[:seq_len], row)
+        x, y, labels, _sn = _build_features(df.iloc[:seq_len], row)
         x_t = torch.from_numpy(x).unsqueeze(0).to(device)
+        sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
         with torch.no_grad():
-            pred = model(x_t).squeeze(0).cpu().numpy()
+            pred = model(x_t, sn_t).squeeze(0).cpu().numpy()
         all_preds.append(pred)
         all_targets.append(y)
         all_labels.append(labels)
