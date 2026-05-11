@@ -2,7 +2,12 @@
 model_test_v2.py — 双输出 Attention-LSTM 测试评估
 M 负责，dev-m 分支
 
-v2.1: SN embedding + variance loss + Isp epsilon fix
+评估内容：
+  1. 全局 RMSE/MAE（thrust + mfr）
+  2. 按 11 种 test_mode 分项 RMSE 表
+  3. v1 vs v2 thrust RMSE 对比
+  4. Isp = thrust / (mfr × g0) 曲线
+  5. 生成接口文件供 Z 使用（predictions_dual.npy, targets_dual.npy, anomaly_labels.npy）
 """
 
 import os, json, sys
@@ -15,7 +20,6 @@ import matplotlib.pyplot as plt
 from data_pipeline_v2 import (
     load_sequence, _build_features,
     THRUST_SCALE, MFR_MAX, INPUT_DIM, TEST_MODE_LIST,
-    UNKNOWN_SN_ID,
     save_meta_info,
 )
 from model_train_v2 import DualOutputLSTM
@@ -23,7 +27,11 @@ from model_train_v2 import DualOutputLSTM
 G0 = 9.80665  # m/s^2
 
 
+# ============================================================
+# 评估工具
+# ============================================================
 def compute_metrics(preds, targets, scale):
+    """preds/targets 在归一化空间，scale 用于反归一化。返回物理单位的 RMSE/MAE。"""
     p = preds * scale
     t = targets * scale
     rmse = np.sqrt(np.mean((p - t) ** 2))
@@ -31,31 +39,39 @@ def compute_metrics(preds, targets, scale):
     return rmse, mae
 
 
+# ============================================================
+# 主流程
+# ============================================================
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
 
+    # ── 加载 v2 模型 ──
     model_path = "outputs/models/v2/dual_output_lstm_v2.pth"
     model = DualOutputLSTM().to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     print(f"Model loaded: {model_path}")
 
+    # ── 路径 ──
     metadata_path = "data/metadata.csv"
     test_dir = "data/dataset/dataset/test/"
 
     df_meta = pd.read_csv(metadata_path)
     df_meta['filename'] = df_meta['filename'].str.strip()
 
+    # 正常文件（用于 RMSE 评估）
     df_normal = df_meta[(df_meta['anomalous'] == False)].copy()
+
+    # 只保留 test_dir 中实际存在的文件
     existing_files = set(os.listdir(test_dir))
     df_normal = df_normal[df_normal['filename'].isin(existing_files)]
-    n_normal = len(df_normal)
-    print(f"\nNormal test files found: {n_normal}")
+    print(f"\nNormal test files found: {len(df_normal)}")
     sys.stdout.flush()
 
+    # ── 逐文件滑动窗口评估 ──
     seq_len = 200
-    stride = 200
+    stride = 200  # 非重叠
 
     all_thrust_rmse = []
     all_thrust_mae = []
@@ -64,16 +80,11 @@ def main():
     mode_metrics = {m: {'thrust_rmse': [], 'thrust_mae': [], 'mfr_rmse': [], 'mfr_mae': [], 'count': 0}
                     for m in TEST_MODE_LIST}
 
-    # ============================================================
-    # 1. 逐文件滑动窗口评估
-    # ============================================================
-    print("  Starting per-file evaluation...")
+    print('  Starting per-file evaluation...')
     sys.stdout.flush()
-
     for file_idx, (_, row) in enumerate(df_normal.iterrows()):
         if file_idx % 100 == 0:
-            print(f"  [{file_idx}/{n_normal}] evaluating...", end="\r", flush=True)
-
+            print(f'  [{file_idx}/{len(df_normal)}] evaluating...', end='\r', flush=True)
         fpath = os.path.join(test_dir, row['filename'])
         try:
             df = pd.read_csv(fpath)
@@ -90,11 +101,10 @@ def main():
         file_mfr_mae = []
 
         for start in range(0, T - seq_len + 1, stride):
-            x, y, _, _sn = _build_features(df.iloc[start:start + seq_len], row)
+            x, y, _ = _build_features(df.iloc[start:start + seq_len], row)
             x_t = torch.from_numpy(x).unsqueeze(0).to(device)
-            sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
             with torch.no_grad():
-                pred = model(x_t, sn_t).squeeze(0).cpu().numpy()
+                pred = model(x_t).squeeze(0).cpu().numpy()  # [200, 2]
 
             t_rmse, t_mae = compute_metrics(pred[:, 0], y[:, 0], THRUST_SCALE)
             m_rmse, m_mae = compute_metrics(pred[:, 1], y[:, 1], MFR_MAX)
@@ -122,13 +132,11 @@ def main():
                 mode_metrics[mode]['mfr_mae'].append(mean_m_mae)
                 mode_metrics[mode]['count'] += 1
 
-    print(f"  [{n_normal}/{n_normal}] evaluating... done")
+    print(f'  [{len(df_normal)}/{len(df_normal)}] evaluating... done')
 
-    # ============================================================
-    # 2. 全局指标
-    # ============================================================
+    # ── 全局指标 ──
     print(f"\n{'='*60}")
-    print(f"  v2.1 DualOutput Attention-LSTM + SN emb — 测试集评估")
+    print(f"  v2 DualOutput Attention-LSTM — 测试集评估")
     print(f"  评估文件数: {len(all_thrust_rmse)}")
     print(f"{'='*60}")
     print(f"  Thrust  RMSE: {np.mean(all_thrust_rmse):.4f} N")
@@ -137,9 +145,7 @@ def main():
     print(f"  MFR     MAE : {np.mean(all_mfr_mae):.1f} mg/s")
     print(f"{'='*60}")
 
-    # ============================================================
-    # 3. 按 test_mode 分项
-    # ============================================================
+    # ── 按 test_mode 分项 ──
     print(f"\n{'─'*80}")
     print(f"  {'Test Mode':15s}  {'Files':>5s}  {'Thrust RMSE':>12s}  {'Thrust MAE':>12s}  {'MFR RMSE':>12s}  {'MFR MAE':>12s}")
     print(f"  {'─'*15}  {'─'*5}  {'─'*12}  {'─'*12}  {'─'*12}  {'─'*12}")
@@ -155,14 +161,12 @@ def main():
             print(f"  {mode:15s}  {m['count']:5d}  {'—':>12}  {'—':>12}  {'—':>12}  {'—':>12}")
     print(f"{'─'*80}")
 
-    # ============================================================
-    # 4. v1 vs v2 对比
-    # ============================================================
+    # ── v1 vs v2 对比 ──
     v1_model_path = "outputs/models/v1/thruster_lstm_v1.pth"
     v1_rmse = None
     if os.path.exists(v1_model_path):
         print(f"\n{'='*60}")
-        print(f"  v1 vs v2.1 对比")
+        print(f"  v1 vs v2 对比")
         print(f"{'='*60}")
 
         class V1LSTM(nn.Module):
@@ -192,12 +196,11 @@ def main():
                 continue
 
             for start in range(0, T - seq_len + 1, stride):
-                # v2.1
-                x_v2, y_v2, _, _sn = _build_features(df.iloc[start:start + seq_len], row)
+                # v2
+                x_v2, y_v2, _ = _build_features(df.iloc[start:start + seq_len], row)
                 x_t = torch.from_numpy(x_v2).unsqueeze(0).to(device)
-                sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
                 with torch.no_grad():
-                    pred_v2 = model(x_t, sn_t).squeeze(0).cpu().numpy()
+                    pred_v2 = model(x_t).squeeze(0).cpu().numpy()
                 v2_rmse, _ = compute_metrics(pred_v2[:, 0], y_v2[:, 0], THRUST_SCALE)
                 v2_on_same.append(v2_rmse)
 
@@ -216,15 +219,13 @@ def main():
         v1_rmse = np.mean(v1_all_rmse) if v1_all_rmse else 0
         v2_rmse_same = np.mean(v2_on_same) if v2_on_same else 0
         print(f"  v1 (3-dim, single-output): thrust RMSE = {v1_rmse:.4f} N")
-        print(f"  v2.1 (17-dim + SN emb, dual): thrust RMSE = {v2_rmse_same:.4f} N")
-        print(f"  v2.1 额外输出 MFR RMSE = {np.mean(all_mfr_rmse):.1f} mg/s")
+        print(f"  v2 (17-dim, dual-output):  thrust RMSE = {v2_rmse_same:.4f} N")
+        print(f"  v2 额外输出 MFR RMSE = {np.mean(all_mfr_rmse):.1f} mg/s")
         print(f"{'='*60}")
     else:
         print(f"\n  [INFO] v1 model not found at {v1_model_path}, skipping comparison")
 
-    # ============================================================
-    # 5. 逐 mode 出图：thrust + mfr + Isp 三联
-    # ============================================================
+    # ── 逐 mode 出图：thrust + mfr + Isp 三联 ──
     print(f"\n{'='*60}")
     print(f"  逐 test_mode 出图")
     print(f"{'='*60}")
@@ -236,11 +237,10 @@ def main():
         fpath = os.path.join(test_dir, row['filename'])
         df = pd.read_csv(fpath)
         start = len(df) // 3
-        x, y, _, _sn = _build_features(df.iloc[start:start + seq_len], row)
+        x, y, _ = _build_features(df.iloc[start:start + seq_len], row)
         x_t = torch.from_numpy(x).unsqueeze(0).to(device)
-        sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
         with torch.no_grad():
-            pred = model(x_t, sn_t).squeeze(0).cpu().numpy()
+            pred = model(x_t).squeeze(0).cpu().numpy()
 
         thrust_pred = pred[:, 0] * THRUST_SCALE
         mfr_pred = pred[:, 1] * MFR_MAX
@@ -255,6 +255,7 @@ def main():
 
         fig, axes = plt.subplots(3, 1, figsize=(16, 10))
 
+        # thrust
         ax = axes[0]
         ax.plot(thrust_true, label='Actual', color='blue', alpha=0.7, linewidth=1.2)
         ax.plot(thrust_pred, label='Predicted', color='red', alpha=0.7, linestyle='--', linewidth=1.2)
@@ -262,10 +263,11 @@ def main():
         ax.text(0.02, 0.95, f"RMSE={t_rmse:.4f} N", transform=ax.transAxes, fontsize=10,
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         ax.set_ylabel("Thrust (N)")
-        ax.set_title(f"Thrust — {mode} ({sn})", fontsize=11, fontweight='bold')
+        ax.set_title(f"Thrust  —  {mode}  ({sn})", fontsize=11, fontweight='bold')
         ax.legend(loc='upper right', fontsize=9)
         ax.grid(True, linestyle=':', alpha=0.5)
 
+        # mfr
         ax = axes[1]
         ax.plot(mfr_true, label='Actual', color='blue', alpha=0.7, linewidth=1.2)
         ax.plot(mfr_pred, label='Predicted', color='red', alpha=0.7, linestyle='--', linewidth=1.2)
@@ -273,10 +275,11 @@ def main():
         ax.text(0.02, 0.95, f"RMSE={m_rmse:.1f} mg/s", transform=ax.transAxes, fontsize=10,
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         ax.set_ylabel("MFR (mg/s)")
-        ax.set_title(f"MFR — {mode} ({sn})", fontsize=11, fontweight='bold')
+        ax.set_title(f"MFR  —  {mode}  ({sn})", fontsize=11, fontweight='bold')
         ax.legend(loc='upper right', fontsize=9)
         ax.grid(True, linestyle=':', alpha=0.5)
 
+        # isp
         ax = axes[2]
         ax.plot(isp_true, label='Actual Isp', color='blue', alpha=0.7, linewidth=1.2)
         ax.plot(isp_pred, label='Predicted Isp', color='red', alpha=0.7, linestyle='--', linewidth=1.2)
@@ -285,7 +288,7 @@ def main():
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         ax.set_xlabel("Time Step")
         ax.set_ylabel("Isp (s)")
-        ax.set_title(f"Isp = thrust / (mfr x g0) — {mode} ({sn})", fontsize=11, fontweight='bold')
+        ax.set_title(f"Isp = thrust / (mfr × g0)  —  {mode}  ({sn})", fontsize=11, fontweight='bold')
         ax.legend(loc='upper right', fontsize=9)
         ax.grid(True, linestyle=':', alpha=0.5)
 
@@ -295,7 +298,7 @@ def main():
         plt.close()
         print(f"  {fig_path}")
 
-    # 汇总图
+    # 额外：v1 vs v2 thrust 对比图（各 mode 拼一张汇总）
     fig, axes = plt.subplots(3, 4, figsize=(20, 12))
     axes = axes.flatten()
     for i, (_, row) in enumerate(sample_files.iterrows()):
@@ -304,30 +307,27 @@ def main():
         fpath = os.path.join(test_dir, row['filename'])
         df = pd.read_csv(fpath)
         start = len(df) // 3
-        x, y, _, _sn = _build_features(df.iloc[start:start + seq_len], row)
+        x, y, _ = _build_features(df.iloc[start:start + seq_len], row)
         x_t = torch.from_numpy(x).unsqueeze(0).to(device)
-        sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
         with torch.no_grad():
-            pred = model(x_t, sn_t).squeeze(0).cpu().numpy()
+            pred = model(x_t).squeeze(0).cpu().numpy()
         thrust_pred = pred[:, 0] * THRUST_SCALE
         thrust_true = y[:, 0] * THRUST_SCALE
         ax = axes[i]
         ax.plot(thrust_true, label='Actual', color='blue', alpha=0.5, linewidth=0.8)
-        ax.plot(thrust_pred, label='v2.1 Pred', color='red', alpha=0.7, linestyle='--', linewidth=0.8)
+        ax.plot(thrust_pred, label='v2 Pred', color='red', alpha=0.7, linestyle='--', linewidth=0.8)
         ax.set_title(f"{row['test_mode']}", fontsize=9)
         ax.legend(fontsize=7)
         ax.grid(True, linestyle=':', alpha=0.4)
     axes[11].set_visible(False)
-    plt.suptitle("v2.1 Thrust Prediction by Test Mode", fontsize=14, fontweight='bold')
+    plt.suptitle("v2 Thrust Prediction by Test Mode", fontsize=14, fontweight='bold')
     plt.tight_layout()
     summary_path = os.path.join(fig_dir, "thrust_summary_11mode.png")
     plt.savefig(summary_path, dpi=300)
     plt.close()
     print(f"  {summary_path}")
 
-    # ============================================================
-    # 6. 生成接口文件供 Z 使用
-    # ============================================================
+    # ── 生成接口文件供 Z 使用 ──
     print(f"\n{'='*60}")
     print(f"  生成接口文件")
     print(f"{'='*60}")
@@ -338,16 +338,12 @@ def main():
     all_targets = []
     all_labels = []
 
-    df_anomalous = df_meta[df_meta['anomalous'] == True].copy()
-    df_anomalous = df_anomalous[df_anomalous['filename'].isin(existing_files)]
-
-    total_files = n_normal + len(df_anomalous)
-    done = 0
-
+    n_iface = len(df_normal) + len(df_meta[df_meta['anomalous'] == True])
+    iface_done = 0
     # 正常文件
     for _, row in df_normal.iterrows():
-        if done % 200 == 0:
-            print(f"  [{done}/{total_files}] generating interface files...", end="\r", flush=True)
+        if iface_done % 200 == 0:
+            print(f'  [{iface_done}/{n_iface}] generating interface files...', end='\r', flush=True)
         fpath = os.path.join(test_dir, row['filename'])
         try:
             df = pd.read_csv(fpath)
@@ -356,20 +352,21 @@ def main():
         T = len(df)
         if T < seq_len:
             continue
-        x, y, labels, _sn = _build_features(df.iloc[:seq_len], row)
+        x, y, labels = _build_features(df.iloc[:seq_len], row)
         x_t = torch.from_numpy(x).unsqueeze(0).to(device)
-        sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
         with torch.no_grad():
-            pred = model(x_t, sn_t).squeeze(0).cpu().numpy()
+            pred = model(x_t).squeeze(0).cpu().numpy()
         all_preds.append(pred)
         all_targets.append(y)
         all_labels.append(labels)
-        done += 1
+        iface_done += 1
 
     # 异常文件
+    df_anomalous = df_meta[df_meta['anomalous'] == True].copy()
+    df_anomalous = df_anomalous[df_anomalous['filename'].isin(existing_files)]
     for _, row in df_anomalous.iterrows():
-        if done % 200 == 0:
-            print(f"  [{done}/{total_files}] generating interface files...", end="\r", flush=True)
+        if iface_done % 200 == 0:
+            print(f'  [{iface_done}/{n_iface}] generating interface files...', end='\r', flush=True)
         fpath = os.path.join(test_dir, row['filename'])
         try:
             df = pd.read_csv(fpath)
@@ -378,40 +375,37 @@ def main():
         T = len(df)
         if T < seq_len:
             continue
-        x, y, labels, _sn = _build_features(df.iloc[:seq_len], row)
+        x, y, labels = _build_features(df.iloc[:seq_len], row)
         x_t = torch.from_numpy(x).unsqueeze(0).to(device)
-        sn_t = torch.tensor([UNKNOWN_SN_ID], device=device)
         with torch.no_grad():
-            pred = model(x_t, sn_t).squeeze(0).cpu().numpy()
+            pred = model(x_t).squeeze(0).cpu().numpy()
         all_preds.append(pred)
         all_targets.append(y)
         all_labels.append(labels)
-        done += 1
+        iface_done += 1
 
-    print(f"  [{done}/{total_files}] generating interface files... done")
-
-    preds_stack = np.stack(all_preds)
-    targets_stack = np.stack(all_targets)
-    labels_stack = np.stack(all_labels)
+    print(f'  [{iface_done}/{n_iface}] generating interface files... done')
+    preds_stack = np.stack(all_preds)    # [N, 200, 2]
+    targets_stack = np.stack(all_targets)  # [N, 200, 2]
+    labels_stack = np.stack(all_labels)   # [N, 200]
 
     np.save(os.path.join(output_dir, "predictions_dual.npy"), preds_stack)
     np.save(os.path.join(output_dir, "targets_dual.npy"), targets_stack)
     np.save(os.path.join(output_dir, "anomaly_labels.npy"), labels_stack)
-    print(f"  predictions_dual.npy  -> {preds_stack.shape}  (normalized)")
-    print(f"  targets_dual.npy      -> {targets_stack.shape}  (normalized)")
-    print(f"  anomaly_labels.npy    -> {labels_stack.shape}")
+    print(f"  predictions_dual.npy  → {preds_stack.shape}  (normalized)")
+    print(f"  targets_dual.npy      → {targets_stack.shape}  (normalized)")
+    print(f"  anomaly_labels.npy    → {labels_stack.shape}")
     print(f"  Anomalous files included: {len(df_anomalous)}")
 
+    # meta_info.json
     save_meta_info(os.path.join(output_dir, "meta_info.json"))
 
-    # ============================================================
-    # 7. 汇总
-    # ============================================================
+    # ── 汇总 ──
     print(f"\n{'='*60}")
     print(f"  评估完成")
     print(f"{'='*60}")
-    print(f"  v2.1 thrust RMSE: {np.mean(all_thrust_rmse):.4f} N")
-    print(f"  v2.1 mfr    RMSE: {np.mean(all_mfr_rmse):.1f} mg/s")
+    print(f"  v2 thrust RMSE: {np.mean(all_thrust_rmse):.4f} N")
+    print(f"  v2 mfr    RMSE: {np.mean(all_mfr_rmse):.1f} mg/s")
     if v1_rmse is not None:
         print(f"  v1 thrust RMSE: {v1_rmse:.4f} N  (comparison)")
     print(f"  接口文件: {output_dir}/")
