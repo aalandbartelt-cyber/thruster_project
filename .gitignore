@@ -1,13 +1,8 @@
-cat > .gitignore << 'EOF'
 data/
-outputs/
 __pycache__/
 *.pyc
-*.pth
-*.onnx
-*.npy
-*.png
-*.jpg
-*.jpeg
 .env
-EOF
+# v1 outputs excluded (baseline archive, read-only)
+outputs/figures/v1/
+outputs/models/v1/
+outputs/predictions/v1/
