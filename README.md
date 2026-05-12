@@ -4,11 +4,11 @@
 > 上海大学  
 > 项目全称：基于多源动态特征与多目标耦合预测的航天器推进器数字孪生及健康监测系统
 
-基于 Attention-LSTM 与 SHAP 归因的航天器推进器数字孪生系统。v2 在课程论文 v1 基础上完成五维升级：17维异质特征建模、双输出耦合预测（thrust + mfr + Isp）、基于真实标签的可量化异常检测、17维 SHAP 博弈论归因、MC Dropout 不确定性量化。
+基于 Attention-LSTM 与 SHAP 归因的航天器推进器数字孪生系统。已完成 v2 全流程开发（CUDA），同步在**华为云昇腾 CANN** 上进行国产化算力验证。
 
 ---
 
-## v2 最终指标
+## v2 最终指标（CUDA 基准）
 
 | 指标 | v1（课程论文） | v2.0（参赛） | 提升 |
 |------|-------------|------------|------|
@@ -18,7 +18,6 @@
 | Thrust MAE | — | **0.0637 N** | — |
 | MFR RMSE | 无 | **49.1 mg/s** | 全新能力 |
 | best val_loss | — | **0.000257**（Attention-LSTM） | — |
-| 训练可复现性 | — | 前后两轮差异 < 2% | ✅ |
 
 ### SHAP 关键发现
 
@@ -28,7 +27,21 @@
 | 2 | ton | ton | cumulated_on_time |
 | 3 | cumulated_on_time | cumulated_on_time | **vl** |
 
-三大老化因子（throughput + on_time + pulses）**占 thrust SHAP 的 49%**，v1 仅占 2%。Permutation 交叉验证排名一致。
+三大老化因子（throughput + on_time + pulses）**占 thrust SHAP 的 49%**，v1 仅占 2%。
+
+---
+
+## 国产化算力验证（🔥 核心创新点）
+
+CUDA 闭源，中国航天军工场景须用国产算力。本项目在**华为云昇腾 CANN 9.0** 上重跑 v1/v2 全流程，验证算法在国产架构上的数值一致性。
+
+| 对比项 | CUDA（NVIDIA） | CANN（华为昇腾） |
+|:-------|:--------------:|:--------------:|
+| Thrust RMSE | 0.0832 N | （S 验证中） |
+| MFR RMSE | 49.1 mg/s | （S 验证中） |
+| SHAP 排名 | throughput > ton > on_time | （S 验证中） |
+
+**分支**：`dev-s`
 
 ---
 
@@ -52,7 +65,7 @@ thruster_project/
 ├── outputs/
 │   ├── models/v2/              # 模型权重
 │   ├── predictions/v2/         # 接口npy + SHAP npy
-│   └── figures/v2/             # 图表（11张预测图 + 11张SHAP图）
+│   └── figures/v2/             # 图表
 │
 ├── .gitignore
 ├── requirements.txt
@@ -61,13 +74,20 @@ thruster_project/
 
 ---
 
-## 环境配置
+## 环境配置（CUDA）
 
 ```bash
 conda create -n thruster_ai python=3.10
 conda activate thruster_ai
 pip install -r requirements.txt
 ```
+
+## 环境配置（CANN 华为云昇腾）
+
+详见 `docs/2026-05-12_致S同学_华为云昇腾CANN部署指南.md`：
+- 镜像：CANN 9.0 + PyTorch 2.4.0（官方预装）
+- 仅需修改 3 行代码（`cuda` → `npu`）
+- SHAP 在 CPU 模式运行，无需改动
 
 ---
 
@@ -83,10 +103,8 @@ python model_train_v2.py
 ### 测试评估
 
 ```bash
-python model_test_v2.py
-# 性能对比图表 + 接口npy文件导出
-python model_shap_v2.py
-# 17维 SHAP 归因 + Permutation 交叉验证
+python model_test_v2.py     # 性能对比图表 + 接口npy导出
+python model_shap_v2.py     # 17维 SHAP 归因 + Permutation 交叉验证
 ```
 
 ### 推理（供 Streamlit 调用）
@@ -95,23 +113,16 @@ python model_shap_v2.py
 from inference_utils import load_dual_model, predict, predict_with_uncertainty
 
 model = load_dual_model("outputs/models/v2/dual_output_lstm_v2.pth")
-thrust, mfr, isp = predict(model, x_tensor)  # 确定性推理
+thrust, mfr, isp = predict(model, x_tensor)
 t_mean, m_mean, i_mean, t_std, m_std, i_std = \
     predict_with_uncertainty(model, x_tensor, n_samples=30)  # MC Dropout
 ```
 
-### 异常检测评估（Z负责）
+### 异常检测（Z负责）
 
 ```bash
-python model_anomaly_eval.py
-# 读取 outputs/predictions/v2/*.npy → P/R/F1/IoU
-```
-
-### ONNX 量化（Z负责）
-
-```bash
-python model_onnx_export.py
-# FP32/FP16/INT8 三档对比
+python model_anomaly_eval.py     # → P/R/F1/IoU
+python model_onnx_export.py      # → FP32/FP16/INT8 三档对比
 ```
 
 ### 启动数字孪生大屏
@@ -126,12 +137,10 @@ streamlit run app_v2.py
 
 ```
 main          ← 5/14 集成节点合并
-├── dev-m     ← M（模型层）
-└── dev-z     ← Z（评估/部署/UI）
+├── dev-m     ← M（模型层：pipeline → 训练 → SHAP → 推理）
+├── dev-z     ← Z（评估/部署：异常检测 → ONNX → UI）
+└── dev-s     ← S（CANN验证：代码迁移 → NPU重跑 → 对比报告）
 ```
-
-- 每人只在自己分支提交，禁止直接 push 到 main
-- 文件归属严格隔离
 
 ---
 
@@ -139,8 +148,9 @@ main          ← 5/14 集成节点合并
 
 | 角色 | 承担 |
 |------|------|
-| **M** | 数据 pipeline → 双输出训练 → 测试评估 → SHAP 归因 → 推理封装 |
-| **Z** | 异常检测评估 → ONNX 量化 → Streamlit UI |
+| **M** | 模型层（CUDA）：数据pipeline → 训练 → SHAP → 推理封装 |
+| **Z** | 评估部署层：异常检测 → ONNX量化 → Streamlit UI |
+| **S**（5/12加入） | **CANN验证层**：华为云昇腾全流程重跑 + CUDA vs CANN 对比报告 |
 
 ---
 
