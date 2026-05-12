@@ -86,21 +86,46 @@ st.title("🚀 航天单组元推进器 AI 健康监控大屏")
 st.caption("双输出 Attention‑LSTM   |   17维特征融合   |   比冲实时解算")
 
 if uploaded_file is not None:
-    # ------- 数据模拟（说明：联调时替换为真实data_pipeline调用）-------
-    df = pd.read_csv(uploaded_file)
-    seq_len = min(len(df), 200)
-    # 实际使用时替换为：x_input, _, _ = load_sequence(filepath, meta_row) 等
-    x_input = np.random.randn(seq_len, 17).astype(np.float32)
+    # ------- 从接口文件加载真实序列进行演示 -------
+    # 说明：此方法绕过 CSV 解析和模型推理，直接使用已生成的预测结果，
+    # 以保证演示时曲线代表真实物理数据。联调时可替换为 load_sequence 方式。
+    import numpy as np
+    import json
 
-    # ------- 推理 -------
-    x_tensor = torch.from_numpy(x_input).float()
-    thrust, mfr, isp = predict(model, x_tensor)
-    thrust, mfr, isp = predict(model, x_input)
+    # 加载接口文件
+    preds = np.load("outputs/predictions/v2/predictions_dual.npy")  # [1344, 200, 2]
+    targets = np.load("outputs/predictions/v2/targets_dual.npy")
+    with open("outputs/predictions/v2/meta_info.json", "r") as f:
+        meta = json.load(f)
 
-    # ------- 模拟真实传感器读数（加少量噪声） -------
+    thrust_scale = meta['thrust_scale']  # 8.0
+    mfr_max = meta['mfr_max']            # 2000.0
+
+    # 选择第0个样本（一个正常文件，共200步）
+    sample_idx = 0
+    seq_len = 200
+
+    # 反归一化得到物理单位
+    thrust_pred = preds[sample_idx, :, 0] * thrust_scale      # 牛顿
+    mfr_pred = preds[sample_idx, :, 1] * mfr_max              # mg/s
+    thrust_true = targets[sample_idx, :, 0] * thrust_scale
+    mfr_true = targets[sample_idx, :, 1] * mfr_max
+
+    # 定义 AI 预测基准（用于显示曲线）
+    thrust = thrust_pred
+    mfr = mfr_pred
+
+    # 模拟传感器实际值（在真实值上加极小的噪声）
     np.random.seed(42)
-    actual_thrust = thrust + np.random.normal(0, 0.015, thrust.shape)
-    actual_mfr = mfr + np.random.normal(0, 2.5, mfr.shape)
+    actual_thrust = thrust_true + np.random.normal(0, 0.005, seq_len)
+    actual_mfr = mfr_true + np.random.normal(0, 0.5, seq_len)
+
+    # 计算比冲（Isp），将 mfr 从 mg/s 转换为 kg/s
+    g0 = 9.80665
+    isp = thrust_pred / (mfr_pred * 1e-3 * g0)
+
+    # 注意：这里的 thrust, mfr, isp 已经是 numpy 数组，形状 (200,)，
+    # 后面的 compute_residuals 和报告生成可直接使用。
 
     # ------- 残差计算与异常检测 -------
     residuals, is_anomaly, anomaly_ratio = compute_residuals(thrust, actual_thrust, threshold)
