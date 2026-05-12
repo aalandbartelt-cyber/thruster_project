@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import torch
 from inference_utils import (
     load_dual_model,
     predict,
@@ -92,6 +93,8 @@ if uploaded_file is not None:
     x_input = np.random.randn(seq_len, 17).astype(np.float32)
 
     # ------- 推理 -------
+    x_tensor = torch.from_numpy(x_input).float()
+    thrust, mfr, isp = predict(model, x_tensor)
     thrust, mfr, isp = predict(model, x_input)
 
     # ------- 模拟真实传感器读数（加少量噪声） -------
