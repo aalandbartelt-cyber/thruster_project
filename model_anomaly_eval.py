@@ -1,3 +1,11 @@
+"""
+评估模块最终结论：
+- 单 thrust 残差阈值法：0.6N 阈值下 Recall=0.008，无法检测异常
+- 融合 thrust+mfr 残差（取最大值）：Recall=0.992，但 Precision≈0
+- 结论：正常点与异常点在残差幅值空间高度重叠，固定阈值法不适用。
+  必须引入时序突变检测、MC Dropout 不确定性量化等方法，
+  此为未来改进方向。
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import (
@@ -33,8 +41,8 @@ def denormalize(preds, targets, meta):
     """
     根据元信息里的缩放系数，将归一化值转回物理单位
     """
-    thrust_scale = meta["THRUST_SCALE"]   # 8.0
-    mfr_max = meta["MFR_MAX"]             # 2000.0
+    thrust_scale = meta["thrust_scale"]   # 8.0
+    mfr_max = meta["mfr_max"]             # 2000.0
 
     preds_denorm = np.zeros_like(preds)
     targets_denorm = np.zeros_like(targets)
@@ -164,11 +172,11 @@ def plot_confusion_matrix(y_pred, y_true, save_path=None):
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
 
-def plot_threshold_sensitivity(residuals, labels, thresholds=[0.3,0.4,0.5,0.6,0.8], save_path=None):
+def plot_threshold_sensitivity(residuals, labels_bin, thresholds=[0.3,0.4,0.5,0.6,0.8], save_path=None):
     precs, recs, f1s = [], [], []
     for th in thresholds:
         pred = threshold_detection(residuals, threshold=th)
-        metrics = compute_metrics(pred, labels)
+        metrics = compute_metrics(pred, labels_bin)
         precs.append(metrics['precision'])
         recs.append(metrics['recall'])
         f1s.append(metrics['f1'])
@@ -185,9 +193,9 @@ def plot_threshold_sensitivity(residuals, labels, thresholds=[0.3,0.4,0.5,0.6,0.
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
 
-def plot_residual_distribution(residuals, labels, save_path=None):
-    normal_res = residuals[labels==0]
-    anomaly_res = residuals[labels==1]
+def plot_residual_distribution(residuals, labels_bin, save_path=None):
+    normal_res = residuals[labels_bin==0]
+    anomaly_res = residuals[labels_bin==1]
     plt.figure(figsize=(8,5))
     plt.hist(normal_res, bins=50, alpha=0.6, label='Normal', color='green')
     plt.hist(anomaly_res, bins=50, alpha=0.6, label='Anomaly', color='red')
@@ -204,7 +212,7 @@ def plot_residual_distribution(residuals, labels, save_path=None):
 ############################################
 def main():
     # ---- Mock 数据模式（今天先用这个跑通） ----
-    USE_MOCK = True   # 今晚拿到真实npy后改为 False
+    USE_MOCK = False  # 今晚拿到真实npy后改为 False
     if USE_MOCK:
         print("使用 Mock 数据验证流程...")
         N, seq_len = 50, 200
@@ -232,14 +240,23 @@ def main():
     preds_denorm, targets_denorm = denormalize(preds, targets, meta)
 
     # 计算残差（只用thrust）
-    residuals = compute_residuals(preds_denorm, targets_denorm)
+    residuals_thrust = compute_residuals(preds_denorm, targets_denorm)  # thrust 残差
+    residuals_mfr = np.abs(preds_denorm[:, :, 1] - targets_denorm[:, :, 1])  # mfr 残差 (mg/s)
+    residuals = np.maximum(residuals_thrust, residuals_mfr)  # 取较大值融合
 
     # 默认阈值检测
+ # 默认阈值检测
     threshold = 0.6
     pred_bin = threshold_detection(residuals, threshold)
 
+# 保留原始多类标签（用于后续异常类型分析）
+    raw_labels = labels.copy()
+
+# 将真实标签二值化（0=正常，非0=异常）以匹配二值预测
+    labels_bin = (labels != 0).astype(int)
+
     # 计算指标
-    metrics = compute_metrics(pred_bin, labels)
+    metrics = compute_metrics(pred_bin, labels_bin)
     print("===== 评估结果（Thrust） =====")
     print(f"Precision: {metrics['precision']:.3f}")
     print(f"Recall:    {metrics['recall']:.3f}")
@@ -261,8 +278,8 @@ def main():
     fig_dir = Path("outputs/figures")
     fig_dir.mkdir(parents=True, exist_ok=True)
     plot_confusion_matrix(pred_bin, labels, save_path=fig_dir/"06_confusion_matrix.png")
-    plot_threshold_sensitivity(residuals, labels, save_path=fig_dir/"05_threshold_analysis.png")
-    plot_residual_distribution(residuals, labels, save_path=fig_dir/"residual_dist.png")
+    plot_threshold_sensitivity(residuals, labels_bin, save_path=fig_dir/"05_threshold_analysis.png")
+    plot_residual_distribution(residuals, labels_bin, save_path=fig_dir/"residual_dist.png")
     plt.show()
 
 if __name__ == "__main__":

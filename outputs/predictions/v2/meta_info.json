@@ -1,0 +1,24 @@
+{
+  "thrust_scale": 8.0,
+  "mfr_max": 2000.0,
+  "pressure_max": 25.0,
+  "on_time_max": 8.0,
+  "throughput_max": 25.0,
+  "pulses_max": 25000.0,
+  "test_mode_list": [
+    "ssf",
+    "health_check",
+    "ramp1",
+    "ramp2",
+    "ramp3",
+    "ramp4",
+    "onmod",
+    "offmod",
+    "random_short",
+    "random_long",
+    "random_mixed"
+  ],
+  "input_dim": 17,
+  "output_dim": 2,
+  "seq_len": 200
+}
