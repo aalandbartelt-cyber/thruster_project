@@ -902,7 +902,7 @@ if uploaded_file is not None:
     fig2, (axr1, axr2, axr3) = plt.subplots(3, 1, figsize=(18, 7.5))
     for _ax, _res, _thr, _title, _yl, _clr in [
         (axr1, residuals,     threshold,     '推力残差 · THRUST',    'N',     STATUS_WARN),
-        (axr2, mfr_residuals, mfr_threshold, '流量残差 · MASS FLOW', 'mg/s',  DATA_CYAN),
+        (axr2, mfr_residuals, mfr_threshold, '质量流量残差 · MASS FLOW RATE', 'mg/s',  DATA_CYAN),
         (axr3, isp_residuals, isp_threshold, '比冲残差 · SPECIFIC IMPULSE', 's', DATA_VIOLET),
     ]:
         _ax.plot(t_axis, _res, color=_clr, lw=1.5)
