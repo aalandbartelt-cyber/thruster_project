@@ -247,8 +247,8 @@ def main():
         thrust_true = y[:, 0] * THRUST_SCALE
         mfr_true = y[:, 1] * MFR_MAX
         eps = 1e-8
-        isp_pred = thrust_pred / (mfr_pred * G0 + eps)
-        isp_true = thrust_true / (mfr_true * G0 + eps)
+        isp_pred = thrust_pred / (mfr_pred * 1e-6 * G0 + eps)
+        isp_true = thrust_true / (mfr_true * 1e-6 * G0 + eps)
 
         mode = row['test_mode']
         sn = row['sn']
