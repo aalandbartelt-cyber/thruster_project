@@ -792,6 +792,7 @@ if uploaded_file is not None:
         np.random.seed(42)
         actual_thrust = thrust_true + np.random.normal(0, 0.005, seq_len)
         actual_mfr    = mfr_true    + np.random.normal(0, 0.5,   seq_len)
+        actual_isp    = actual_thrust / (actual_mfr * 1e-6 * 9.80665 + 1e-8)
 
         # MC Dropout 置信度：基于推力预测的变异系数
         _cv = np.mean(thrust_std) / (np.mean(thrust_pred) + 1e-8)
@@ -819,6 +820,7 @@ if uploaded_file is not None:
         np.random.seed(42)
         actual_thrust = thrust_true + np.random.normal(0, 0.005, seq_len)
         actual_mfr    = mfr_true    + np.random.normal(0, 0.5,   seq_len)
+        actual_isp    = actual_thrust / (actual_mfr * 1e-6 * 9.80665 + 1e-8)
         isp = thrust_pred / (mfr_pred * 1e-6 * 9.80665 + 1e-8)
         source_label = "缓存预测回放"
 
@@ -877,7 +879,6 @@ if uploaded_file is not None:
     apply_cn_to_axis(ax2, title='质量流量 · MASS FLOW RATE',
                      xlabel='时间步 (0.01s)', ylabel='流量 (mg/s)')
 
-    actual_isp = actual_thrust / (actual_mfr * 1e-6 * 9.80665 + 1e-8)
     ax3.plot(t_axis, actual_isp, color=DATA_CYAN, lw=1.8, label='传感器实测')
     ax3.plot(t_axis, isp, color=DATA_AMBER, lw=2.0, ls='--', label='AI预测')
     ax3.axhline(np.mean(isp), color=DATA_AMBER, ls=':', lw=1.2, alpha=0.5,
@@ -893,19 +894,28 @@ if uploaded_file is not None:
     # ── 异常检测 ──
     section_header("异常检测与残差监控", "ANOMALY DETECTION")
 
-    fig2, axr = plt.subplots(figsize=(18, 3.2))
-    axr.plot(t_axis, residuals, color=STATUS_WARN, lw=1.8, label='绝对残差')
-    axr.axhline(threshold, color=NASA_RED, ls='--', lw=1.8,
-                label=f'安全阈值 {threshold:.1f} N')
-    if is_anomaly.any():
-        axr.fill_between(t_axis, 0, residuals, where=is_anomaly,
-                         color=NASA_RED, alpha=0.4, label='异常时间步')
-    axr.legend(loc='upper right')
-    axr.grid(True, axis='y')
-    apply_cn_to_axis(axr, title='推力残差实时监控 · RESIDUAL MONITOR',
-                     xlabel='时间步 (0.01s)', ylabel='残差 (N)')
+    mfr_residuals = np.abs(mfr_pred - actual_mfr)
+    isp_residuals = np.abs(isp - actual_isp)
+    mfr_threshold = threshold * (MFR_MAX / THRUST_SCALE)  # 按量纲缩放阈值
+    isp_threshold = threshold * 50                        # Isp 经验阈值
 
-    plt.tight_layout(pad=1.5)
+    fig2, (axr1, axr2, axr3) = plt.subplots(3, 1, figsize=(18, 7.5))
+    for _ax, _res, _thr, _title, _yl, _clr in [
+        (axr1, residuals,     threshold,     '推力残差 · THRUST',    'N',     STATUS_WARN),
+        (axr2, mfr_residuals, mfr_threshold, '流量残差 · MASS FLOW', 'mg/s',  DATA_CYAN),
+        (axr3, isp_residuals, isp_threshold, '比冲残差 · SPECIFIC IMPULSE', 's', DATA_VIOLET),
+    ]:
+        _ax.plot(t_axis, _res, color=_clr, lw=1.5)
+        _ax.axhline(_thr, color=NASA_RED, ls='--', lw=1.2, label=f'阈值 {_thr:.2f} {_yl}')
+        _anom = _res > _thr
+        if _anom.any():
+            _ax.fill_between(t_axis, 0, _res, where=_anom, color=NASA_RED, alpha=0.3)
+        _ax.legend(loc='upper right', fontsize=8)
+        _ax.grid(True, axis='y', alpha=0.3)
+        apply_cn_to_axis(_ax, title=_title, ylabel=f'残差 ({_yl})',
+                         xlabel='时间步 (0.01s)' if _ax is axr3 else '')
+
+    plt.tight_layout(pad=2.0)
     render_fig(fig2)
 
     # ── 异常状态条 ──
