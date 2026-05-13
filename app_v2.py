@@ -638,7 +638,7 @@ with st.sidebar:
     <div class="sidebar-section-en">DETECTION THRESHOLD</div>
     """, unsafe_allow_html=True)
     threshold = st.slider(label="threshold",
-                          min_value=0.1, max_value=2.0, value=0.6, step=0.1,
+                          min_value=0.05, max_value=2.0, value=0.25, step=0.05,
                           label_visibility="collapsed")
     st.markdown(f"""
     <div style="font-size:13px;color:{TEXT_SECONDARY};margin-top:-8px;">
@@ -743,14 +743,16 @@ if uploaded_file is not None:
     with open(tmp_path, 'wb') as f:
         f.write(uploaded_file.getbuffer())
 
-    # 自动检测推进器点火起点（第一个 ton>0 的帧，前留 10 帧缓冲）
+    # 自动定位到稳定燃烧段（跳过瞬态）
     _raw = pd.read_csv(tmp_path)
     _fire = 0
-    for i in range(min(300, len(_raw))):
+    for i in range(min(500, len(_raw))):
         if _raw['ton'].iloc[i] > 0:
             _fire = i
             break
-    offset = max(0, _fire - 10)
+    # 点火后跳过 80 步（800ms，避开启动瞬态），最多偏移到文件前 2/3 处
+    _max_off = max(0, len(_raw) - seq_len - 10)
+    offset = min(_fire + 80, _max_off)
 
     matched = metadata[metadata['filename'] == fname]
     if len(matched) > 0:
