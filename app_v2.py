@@ -120,13 +120,15 @@ def setup_matplotlib_theme():
 
 setup_matplotlib_theme()
 
-# 图像资源（Base64 内嵌，解决 streamlit 不支持本地路径问题）
-_IMG_SHU  = ''
-_IMG_CASC = ''
-for _p, _k in [('assets/shu.png','_IMG_SHU'), ('assets/my_logo.png','_IMG_CASC')]:
+# 图像资源（Base64 内嵌）
+_IMG_BANNER = ''
+for _p in ['assets/shu_banner.jpg', 'assets/shu_banner.png']:
     if os.path.exists(_p):
-        import base64; _b = base64.b64encode(open(_p,'rb').read()).decode()
-        globals()[_k] = f'data:image/png;base64,{_b}'
+        import base64
+        _b = base64.b64encode(open(_p,'rb').read()).decode()
+        _ext = 'jpeg' if _p.endswith('.jpg') else 'png'
+        _IMG_BANNER = f'data:image/{_ext};base64,{_b}'
+        break
 
 # ════════════════════════════════════════════════════════════════════
 # 三、Streamlit + CSS
@@ -564,9 +566,9 @@ section[data-testid="stSidebar"] {{
 
 st.markdown(f"""
 <div class="mission-header">
-    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
-        <img src="{_IMG_SHU}" style="height:56px;">
-        <img src="{_IMG_CASC}" style="height:48px;">
+    <div class="mission-badge">
+        <div class="b1">SHU</div>
+        <div class="b2">CRAIC·26</div>
     </div>
     <div class="mission-title-block">
         <div class="mission-title-en">MONOPROPELLANT THRUSTER DIGITAL TWIN</div>
@@ -612,6 +614,10 @@ metadata = load_metadata()
 # ════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
+    if _IMG_BANNER:
+        st.markdown(f'<div style="text-align:center;padding:0 0 8px 0;">'
+                    f'<img src="{_IMG_BANNER}" style="width:100%;max-width:260px;">'
+                    f'</div>', unsafe_allow_html=True)
     st.markdown("""
     <div class="sidebar-header">
         <div class="sh-cn">任务控制台</div>
