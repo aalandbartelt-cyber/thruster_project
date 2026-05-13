@@ -1024,10 +1024,10 @@ if shap_data is not None:
             _ax.barh(range(len(_idx)), _vals[_idx], color=_color, alpha=0.8, height=0.6)
             _ax.set_yticks(range(len(_idx)))
             _lbls = [shap_data['feats'][i] for i in _idx]
-            _ax.set_yticklabels(_lbls, fontsize=8, fontproperties=_CN_SMALL)
+            _ax.set_yticklabels(_lbls, fontsize=8, )
             _ax.invert_yaxis()
             _ax.set_title(_title, fontsize=11, fontweight='bold', color=TEXT_PRIMARY,
-                          fontproperties=_CN_TITLE)
+                          fontproperties=CN_TITLE)
             _ax.tick_params(colors=TEXT_SECONDARY)
             _ax.set_xticks([])  # 隐藏横轴数值，减少杂乱
             for _b, _v in zip(_ax.containers[0], _vals[_idx]):
