@@ -557,9 +557,9 @@ section[data-testid="stSidebar"] {{
 
 st.markdown(f"""
 <div class="mission-header">
-    <div class="mission-badge">
-        <div class="b1">SHU</div>
-        <div class="b2">CRAIC·26</div>
+    <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;">
+        <img src="assets/shu.png" style="height:58px;border-radius:0;">
+        <img src="assets/my_logo.png" style="height:50px;border-radius:0;">
     </div>
     <div class="mission-title-block">
         <div class="mission-title-en">MONOPROPELLANT THRUSTER DIGITAL TWIN</div>
