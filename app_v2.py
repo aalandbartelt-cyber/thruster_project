@@ -709,7 +709,7 @@ def render_fig(fig):
     fig.savefig(buf, format='png', dpi=180, bbox_inches='tight',
                 facecolor=BG_PANEL, edgecolor='none')
     buf.seek(0)
-    st.image(buf, use_column_width=True)
+    st.image(buf, use_container_width=True)
     plt.close(fig)
 
 
