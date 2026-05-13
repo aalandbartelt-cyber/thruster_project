@@ -877,8 +877,11 @@ if uploaded_file is not None:
     apply_cn_to_axis(ax2, title='质量流量 · MASS FLOW RATE',
                      xlabel='时间步 (0.01s)', ylabel='流量 (mg/s)')
 
-    ax3.plot(t_axis, isp, color=DATA_VIOLET, lw=2.4, label='实时比冲')
-    ax3.axhline(np.mean(isp), color=NASA_RED, ls=':', lw=1.2, alpha=0.5, label=f'均值 {np.mean(isp):.0f} s')
+    actual_isp = actual_thrust / (actual_mfr * 1e-6 * 9.80665 + 1e-8)
+    ax3.plot(t_axis, actual_isp, color=DATA_CYAN, lw=1.8, label='传感器实测')
+    ax3.plot(t_axis, isp, color=DATA_AMBER, lw=2.0, ls='--', label='AI预测')
+    ax3.axhline(np.mean(isp), color=DATA_AMBER, ls=':', lw=1.2, alpha=0.5,
+                label=f'预测均值 {np.mean(isp):.0f} s')
     ax3.legend(loc='upper right')
     ax3.grid(True, axis='y')
     apply_cn_to_axis(ax3, title='比冲 · SPECIFIC IMPULSE',
