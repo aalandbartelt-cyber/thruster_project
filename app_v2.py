@@ -960,12 +960,19 @@ if uploaded_file is not None:
                     <tr><td>模型置信度</td><td>MC Dropout 不确定性评估</td><td>{_bar(model_conf)} {model_conf}/100</td><td>{_badge(conf_level)}</td></tr>
                     <tr style="border-top:2px solid {BORDER};">
                         <td colspan="4" style="font-size:11px;color:{TEXT_DIM};padding:14px 8px;line-height:1.7;">
-                            <span style="font-weight:600;color:{TEXT_SECONDARY};font-size:13px;">评分规则 Scoring Rules</span><br>
-                            <span style="font-size:12px;line-height:2.0;">
-                            ① 预测精度 &nbsp; <i>r</i> = RMS / <i>RMSE</i><sub>0</sub> &nbsp; (<i>RMSE</i><sub>0</sub> = 0.0832 N) &nbsp; &rarr; &nbsp; Score = 100, <i>r</i> &le; 1.5 &nbsp;|&nbsp; 80 &minus; 40(<i>r</i>&minus;1.5)/1.5, 1.5 &lt; <i>r</i> &le; 3 &nbsp;|&nbsp; 40 &minus; 30(<i>r</i>&minus;3)/2, 3 &lt; <i>r</i> &le; 5 &nbsp;|&nbsp; 10, <i>r</i> &gt; 5<br>
-                            ② 异常检测 &nbsp; <i>a</i> = anomaly ratio &nbsp; &rarr; &nbsp; Score = max(0, 100 &minus; 500<i>a</i>)<br>
-                            ③ 模型置信度 &nbsp; <i>c</i> = CV = &sigma;/&mu; &nbsp; (MC Dropout &times;20) &nbsp; &rarr; &nbsp; Score = 98, <i>c</i> &lt; 0.03 &nbsp;|&nbsp; 85, <i>c</i> &lt; 0.08 &nbsp;|&nbsp; 65, <i>c</i> &lt; 0.15 &nbsp;|&nbsp; 40, <i>c</i> &lt; 0.30 &nbsp;|&nbsp; 20, <i>c</i> &ge; 0.30<br>
-                            <b style="color:{NASA_RED};font-size:13px;">Overall = 0.4 &times; S<sub>pred</sub> + 0.3 &times; S<sub>anom</sub> + 0.3 &times; S<sub>conf</sub></b>
+                            <span style="font-weight:700;color:#E8ECEF;font-size:15px;">▌ 评分规则 Scoring Rules</span><br>
+                            <span style="font-size:15px;line-height:2.2;color:#C8D0E0;">
+                            <b style="color:#FFB627;">① 预测精度</b> &nbsp;&nbsp;
+                            r = RMS / RMSE₀ · (RMSE₀ = 0.0832 N)<br>
+                            <span style="padding-left:2em;">
+                            Score = { 100, r ≤ 1.5 &nbsp;|&nbsp; 80 − 40(r−1.5)/1.5, 1.5 < r ≤ 3 &nbsp;|&nbsp; 40 − 30(r−3)/2, 3 < r ≤ 5 &nbsp;|&nbsp; 10, r > 5 }
+                            </span><br>
+                            <b style="color:#FFB627;">② 异常检测</b> &nbsp;&nbsp;
+                            a = anomaly_ratio &nbsp; → &nbsp; Score = max(0, 100 − 500a)<br>
+                            <b style="color:#FFB627;">③ 模型置信度</b> &nbsp;&nbsp;
+                            c = σ/μ &nbsp; (MC Dropout ×20) &nbsp; → &nbsp;
+                            Score = { 98, c < 0.03 &nbsp;|&nbsp; 85, c < 0.08 &nbsp;|&nbsp; 65, c < 0.15 &nbsp;|&nbsp; 40, c < 0.30 &nbsp;|&nbsp; 20, c ≥ 0.30 }<br>
+                            <b style="color:#FC3D21;font-size:15px;">Overall = 0.4 · S<sub>pred</sub> + 0.3 · S<sub>anom</sub> + 0.3 · S<sub>conf</sub></b>
                             </span>
                         </td>
                     </tr>
