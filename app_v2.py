@@ -117,7 +117,10 @@ if uploaded_file is not None:
         x_tensor = torch.from_numpy(x).float().unsqueeze(0)  # [1, 200, 17]
 
         # 模型推理
-        thrust_pred, mfr_pred, isp = predict(model, x_tensor)  # [200]
+        thrust_pred, mfr_pred, isp = predict(model, x_tensor)  # [1, 200]
+        thrust_pred = thrust_pred.squeeze()  # [200]
+        mfr_pred = mfr_pred.squeeze()        # [200]
+        isp = isp.squeeze()                  # [200]
         thrust_true = y_norm[:, 0] * THRUST_SCALE
         mfr_true = y_norm[:, 1] * MFR_MAX
 
