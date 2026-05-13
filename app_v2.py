@@ -943,7 +943,7 @@ if uploaded_file is not None:
                     <tr><td>预测精度</td><td>残差 RMS = {residual_rms:.4f} N</td><td>{_bar(pa.get('score',0))} {pa.get('score',0)}/100</td><td>{_badge(pa.get('level','normal'))}</td></tr>
                     <tr><td>异常检测</td><td>{anom.get('n_anomaly',0)} / {anom.get('total_steps',200)} 步 ({anom_ratio_pct:.1f}%)</td><td>{_bar(int(anom_score))} {int(anom_score)}/100</td><td>{_badge(anom_level)}</td></tr>
                     <tr><td>模型置信度</td><td>MC Dropout 不确定性评估</td><td>{_bar(model_conf)} {model_conf}/100</td><td>{_badge(conf_level)}</td></tr>
-                    <tr style="border-top:2px solid {PANEL_BORDER};">
+                    <tr style="border-top:2px solid {BORDER};">
                         <td colspan="4" style="font-size:11px;color:{TEXT_DIM};padding:14px 8px;line-height:1.7;">
                             <span style="font-weight:600;color:{TEXT_SECONDARY};">评分规则：</span><br>
                             ① 预测精度 —— 基于推力残差 RMS，以模型测试 RMSE（0.0832 N）为基准。RMS ≤ 1.5×RMSE 得满分，≤ 3×RMSE 得 80~100 分。<br>
