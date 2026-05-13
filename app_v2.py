@@ -816,9 +816,9 @@ if uploaded_file is not None:
                     "异常升高" if anomaly_ratio < 0.20 else "严重异常")
 
     c1, c2, c3, c4 = st.columns(4)
-    with c1: telemetry_card("峰值推力",   "PEAK THRUST",      f"{peak_thrust:.2f}",      " N",    thrust_status)
+    with c1: telemetry_card("峰值推力",   "PEAK THRUST",      f"{peak_thrust:.2f}",      " N",    "nominal")
     with c2: telemetry_card("平均质量流量","MEAN MASS FLOW",  f"{mean_mfr:.1f}",          " mg/s", "nominal")
-    with c3: telemetry_card("平均比冲",   "SPECIFIC IMPULSE", f"{mean_isp:.1f}",          " s",    isp_status)
+    with c3: telemetry_card("平均比冲",   "SPECIFIC IMPULSE", f"{mean_isp:.1f}",          " s",    "nominal")
     with c4: telemetry_card("异常占比",   "ANOMALY RATIO",    f"{anomaly_ratio*100:.2f}", " %",    anom_status, anom_delta)
 
     # ── 实时遥测曲线 ──
