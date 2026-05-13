@@ -616,7 +616,7 @@ def load_shap_data():
         st = np.load(f"{_d}/shap_thrust.npy")
         sm = np.load(f"{_d}/shap_mfr.npy")
         si = np.load(f"{_d}/shap_isp.npy")
-        return {'thrust': np.abs(st).mean(0), 'mfr': np.abs(sm).mean(0), 'feats': _f}
+        return {'thrust': np.abs(st), 'mfr': np.abs(sm), 'isp': np.abs(si), 'feats': _f}
     except Exception:
         return None
 
@@ -1015,8 +1015,11 @@ if shap_data is not None:
         (col_s3, 'isp', '比冲 Isp', '#2ecc71'),  # reuse thrust as placeholder
     ]:
         with _col:
-            _vals = shap_data[_key]
-            _idx = np.argsort(_vals)[-7:]  # top 7
+            _vals = np.array(shap_data[_key], dtype=float).ravel()
+            if _vals.ndim != 1 or len(_vals) != 17:
+                st.write(f"⚠️ SHAP data shape error: {_key}={_vals.shape}")
+                continue
+            _idx = np.argsort(_vals)[-7:]
             _fig, _ax = plt.subplots(figsize=(4.5, 3.5))
             _ax.barh(range(len(_idx)), _vals[_idx], color=_color, alpha=0.8, height=0.6)
             _ax.set_yticks(range(len(_idx)))
