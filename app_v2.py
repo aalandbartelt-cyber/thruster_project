@@ -224,12 +224,12 @@ if uploaded_file is not None:
 
     with right_col:
         if generate_report:
-            with st.spinner(“正在生成健康诊断报告...”):
+            with st.spinner("正在生成健康诊断报告..."):
                 report = generate_health_report(thrust_pred, mfr_pred, isp, is_anomaly=is_anomaly)
             r = report
             ts = r['thrust_status']; ms = r['mfr_status']; is_ = r['isp_status']
             as_ = r.get('anomaly_status', {})
-            st.markdown(f”””
+            st.markdown(f"""
             ### 📋 健康诊断报告
 
             **{r['summary']}**
@@ -240,9 +240,9 @@ if uploaded_file is not None:
             | 🔹 质量流量 MFR | {ms['value']} | {ms['score']}/100 | {'🟢' if ms['level']=='good' else '🟡' if ms['level']=='warning' else '🔴'} {ms['level']} |
             | 🔹 比冲 Isp | {is_['value']} | {is_['score']}/100 | {'🟢' if is_['level']=='good' else '🟡' if is_['level']=='warning' else '🔴'} {is_['level']} |
             | 🔹 异常占比 | {as_.get('anomaly_ratio',0)*100:.1f}% | — | {as_.get('level','normal')} |
-            “””)
+            """)
         else:
-            st.markdown(“> 点击侧边栏 **”一键生成健康报告”** 按钮获取详细诊断。”)
+            st.markdown("> 点击侧边栏 **"一键生成健康报告"** 按钮获取详细诊断。")
 
 else:
     # ---------------- 默认欢迎界面 ----------------
