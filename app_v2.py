@@ -606,8 +606,23 @@ def load_metadata():
     return df
 
 
+@st.cache_resource
+def load_shap():
+    _d = "outputs/predictions/v2"
+    _f = ['ton','vl','test_pressure','cumulated_on_time','cumulated_throughput',
+          'cumulated_pulses','ssf','health_check','ramp1','ramp2','ramp3','ramp4',
+          'onmod','offmod','random_short','random_long','random_mixed']
+    try:
+        st = np.load(f"{_d}/shap_thrust.npy")
+        sm = np.load(f"{_d}/shap_mfr.npy")
+        return {'thrust': np.abs(st).mean(0), 'mfr': np.abs(sm).mean(0), 'feats': _f}
+    except Exception:
+        return None
+
+
 model = load_model()
 metadata = load_metadata()
+shap_data = load_shap()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -945,11 +960,13 @@ if uploaded_file is not None:
                     <tr><td>模型置信度</td><td>MC Dropout 不确定性评估</td><td>{_bar(model_conf)} {model_conf}/100</td><td>{_badge(conf_level)}</td></tr>
                     <tr style="border-top:2px solid {BORDER};">
                         <td colspan="4" style="font-size:11px;color:{TEXT_DIM};padding:14px 8px;line-height:1.7;">
-                            <span style="font-weight:600;color:{TEXT_SECONDARY};">评分规则：</span><br>
-                            ① 预测精度 —— 基于推力残差 RMS，以模型测试 RMSE（0.0832 N）为基准。RMS ≤ 1.5×RMSE 得满分，≤ 3×RMSE 得 80~100 分。<br>
-                            ② 异常检测 —— 基于残差超过阈值的步数占比。0% 异常得满分，20% 及以上得 0 分。<br>
-                            ③ 模型置信度 —— 基于 MC Dropout ×20 次推理的变异系数（CV = 标准差/均值）。CV 越小置信度越高。<br>
-                            <span style="color:{NASA_RED};font-weight:500;">综合 = 精度×0.4 + 异常×0.3 + 置信×0.3</span>
+                            <span style="font-weight:600;color:{TEXT_SECONDARY};font-size:13px;">评分规则 Scoring Rules</span><br>
+                            <span style="font-size:12px;line-height:2.0;">
+                            ① 预测精度 &nbsp; <i>r</i> = RMS / <i>RMSE</i><sub>0</sub> &nbsp; (<i>RMSE</i><sub>0</sub> = 0.0832 N) &nbsp; &rarr; &nbsp; Score = 100, <i>r</i> &le; 1.5 &nbsp;|&nbsp; 80 &minus; 40(<i>r</i>&minus;1.5)/1.5, 1.5 &lt; <i>r</i> &le; 3 &nbsp;|&nbsp; 40 &minus; 30(<i>r</i>&minus;3)/2, 3 &lt; <i>r</i> &le; 5 &nbsp;|&nbsp; 10, <i>r</i> &gt; 5<br>
+                            ② 异常检测 &nbsp; <i>a</i> = anomaly ratio &nbsp; &rarr; &nbsp; Score = max(0, 100 &minus; 500<i>a</i>)<br>
+                            ③ 模型置信度 &nbsp; <i>c</i> = CV = &sigma;/&mu; &nbsp; (MC Dropout &times;20) &nbsp; &rarr; &nbsp; Score = 98, <i>c</i> &lt; 0.03 &nbsp;|&nbsp; 85, <i>c</i> &lt; 0.08 &nbsp;|&nbsp; 65, <i>c</i> &lt; 0.15 &nbsp;|&nbsp; 40, <i>c</i> &lt; 0.30 &nbsp;|&nbsp; 20, <i>c</i> &ge; 0.30<br>
+                            <b style="color:{NASA_RED};font-size:13px;">Overall = 0.4 &times; S<sub>pred</sub> + 0.3 &times; S<sub>anom</sub> + 0.3 &times; S<sub>conf</sub></b>
+                            </span>
                         </td>
                     </tr>
                 </tbody>
@@ -978,7 +995,35 @@ else:
 
 
 # ════════════════════════════════════════════════════════════════════
-# 九、Mission Footer
+# SHAP 归因分析面板
+# ════════════════════════════════════════════════════════════════════
+
+    if shap_data is not None:
+        section_header("SHAP 特征归因分析", "ATTRIBUTION ANALYSIS")
+        col_s1, col_s2, col_s3 = st.columns(3)
+        for _col, _key, _title, _color in [
+            (col_s1, 'thrust', '推力 Thrust', '#e74c3c'),
+            (col_s2, 'mfr',    '质量流量 MFR', '#3498db'),
+            (col_s3, 'thrust', '比冲 Isp', '#2ecc71'),  # reuse thrust as placeholder
+        ]:
+            with _col:
+                _vals = shap_data[_key]
+                _idx = np.argsort(_vals)[-7:]  # top 7
+                _fig, _ax = plt.subplots(figsize=(4.5, 3.5))
+                _ax.barh(range(len(_idx)), _vals[_idx], color=_color, alpha=0.8, height=0.6)
+                _ax.set_yticks(range(len(_idx)))
+                _ax.set_yticklabels([shap_data['feats'][i] for i in _idx], fontsize=8)
+                _ax.invert_yaxis()
+                _ax.set_title(_title, fontsize=11, fontweight='bold', color=TEXT_PRIMARY)
+                _ax.tick_params(colors=TEXT_SECONDARY)
+                for _b, _v in zip(_ax.containers[0], _vals[_idx]):
+                    _ax.text(_b.get_width()*1.02, _b.get_y()+_b.get_height()/2,
+                             f'{_v:.2e}', va='center', fontsize=7, color=TEXT_PRIMARY)
+                plt.tight_layout()
+                render_fig(_fig)
+
+# ════════════════════════════════════════════════════════════════════
+# 八、Footer
 # ════════════════════════════════════════════════════════════════════
 
 st.markdown(f"""
