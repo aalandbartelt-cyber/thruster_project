@@ -238,10 +238,15 @@ def generate_health_report(thrust, mfr, isp, is_anomaly=None,
     m_mean = float(np.mean(mfr))    if isinstance(mfr, np.ndarray)    else mfr
     i_mean = float(np.mean(isp))    if isinstance(isp, np.ndarray)    else isp
 
-    # —— 评分逻辑：基于预测精度 ——
-    # 残差越小越健康（如果提供了残差RMS）
+    # —— 评分逻辑：基于预测精度，用模型测试 RMSE（0.0832N）校准 ——
+    MODEL_RMSE = 0.0832
     if residual_rms is not None:
-        acc_score = max(0, min(100, 100 - residual_rms / 0.01 * 20))
+        ratio = residual_rms / MODEL_RMSE
+        if ratio <= 1.5:    acc_score = 100
+        elif ratio <= 3.0:  acc_score = 80 - (ratio - 1.5) / 1.5 * 40
+        elif ratio <= 5.0:  acc_score = 40 - (ratio - 3.0) / 2.0 * 30
+        else:               acc_score = 10
+        acc_score = max(0, min(100, acc_score))
         acc_level = 'good' if acc_score >= 70 else ('warning' if acc_score >= 40 else 'critical')
     else:
         acc_score = 100

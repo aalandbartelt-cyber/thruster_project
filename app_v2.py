@@ -810,8 +810,7 @@ if uploaded_file is not None:
     mean_mfr    = np.mean(actual_mfr)
     mean_isp    = np.mean(isp)
 
-    thrust_status = "nominal" if peak_thrust > 1.0 else ("warning" if peak_thrust > 0.5 else "critical")
-    isp_status    = "nominal" if mean_isp    > 150 else ("warning" if mean_isp    > 100 else "critical")
+    residual_rms = float(np.sqrt(np.mean(residuals**2)))
     anom_status   = "nominal" if anomaly_ratio < 0.05 else ("warning" if anomaly_ratio < 0.20 else "critical")
     anom_delta    = "状态正常" if anomaly_ratio < 0.05 else (
                     "异常升高" if anomaly_ratio < 0.20 else "严重异常")
@@ -895,7 +894,6 @@ if uploaded_file is not None:
     if generate_report:
         section_header("健康诊断报告", "DIAGNOSTIC REPORT")
         with st.spinner("正在生成诊断报告..."):
-            residual_rms = float(np.sqrt(np.mean(residuals**2)))
             report = generate_health_report(thrust_pred, mfr_pred, isp,
                                             is_anomaly=is_anomaly,
                                             residual_rms=residual_rms)
