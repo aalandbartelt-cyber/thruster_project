@@ -3,6 +3,11 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+from matplotlib.font_manager import FontProperties
+# 设置中文字体
+_FONT = FontProperties(fname='/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf')
+plt.rcParams['font.family'] = 'Droid Sans Fallback'
+plt.rcParams['axes.unicode_minus'] = False
 import pandas as pd
 import torch
 from inference_utils import (
@@ -219,12 +224,25 @@ if uploaded_file is not None:
 
     with right_col:
         if generate_report:
-            with st.spinner("正在生成健康诊断报告..."):
+            with st.spinner(“正在生成健康诊断报告...”):
                 report = generate_health_report(thrust_pred, mfr_pred, isp, is_anomaly=is_anomaly)
-            st.info("📋 诊断报告已生成")
-            st.json(report)
+            r = report
+            ts = r['thrust_status']; ms = r['mfr_status']; is_ = r['isp_status']
+            as_ = r.get('anomaly_status', {})
+            st.markdown(f”””
+            ### 📋 健康诊断报告
+
+            **{r['summary']}**
+
+            | 指标 | 数值 | 评分 | 状态 |
+            |:----|:----|:---:|:----:|
+            | 🔹 推力 Thrust | {ts['value']} | {ts['score']}/100 | {'🟢' if ts['level']=='good' else '🟡' if ts['level']=='warning' else '🔴'} {ts['level']} |
+            | 🔹 质量流量 MFR | {ms['value']} | {ms['score']}/100 | {'🟢' if ms['level']=='good' else '🟡' if ms['level']=='warning' else '🔴'} {ms['level']} |
+            | 🔹 比冲 Isp | {is_['value']} | {is_['score']}/100 | {'🟢' if is_['level']=='good' else '🟡' if is_['level']=='warning' else '🔴'} {is_['level']} |
+            | 🔹 异常占比 | {as_.get('anomaly_ratio',0)*100:.1f}% | — | {as_.get('level','normal')} |
+            “””)
         else:
-            st.markdown("> 点击侧边栏 **“一键生成健康报告”** 按钮获取详细诊断。")
+            st.markdown(“> 点击侧边栏 **”一键生成健康报告”** 按钮获取详细诊断。”)
 
 else:
     # ---------------- 默认欢迎界面 ----------------

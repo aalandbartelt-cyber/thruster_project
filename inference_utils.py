@@ -197,15 +197,18 @@ def compute_residuals(pred_thrust, actual_thrust, threshold=0.6):
 # ═══════════════════════════════════════════
 
 def _health_score(value, good, warn, bad, lower_is_better=False):
-    """根据阈值返回健康评分 0-100 和等级"""
+    """根据阈值返回健康评分 0-100 和等级（结果钳制在 [0, 100]）"""
     if lower_is_better:
-        if value <= good:   return 100, 'good'
-        if value <= warn:   return 60 - 40*(value-good)/(warn-good), 'warning'
-        return 20 - 20*(value-warn)/(bad-warn), 'critical'
+        if value <= good:   score = 100
+        elif value <= warn: score = 60 - 40*(value-good)/(warn-good)
+        else:               score = 20 - 20*(value-warn)/(bad-warn)
     else:
-        if value >= good:   return 100, 'good'
-        if value >= warn:   return 60 - 40*(good-value)/(good-warn), 'warning'
-        return 20 - 20*(warn-value)/(warn-bad), 'critical'
+        if value >= good:   score = 100
+        elif value >= warn: score = 60 - 40*(good-value)/(good-warn)
+        else:               score = 20 - 20*(warn-value)/(warn-bad)
+    score = max(0, min(100, score))
+    level = 'good' if score >= 70 else ('warning' if score >= 40 else 'critical')
+    return int(score), level
 
 
 def generate_health_report(thrust, mfr, isp, is_anomaly=None,
