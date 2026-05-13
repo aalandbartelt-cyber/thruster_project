@@ -735,17 +735,26 @@ def apply_cn_to_axis(ax, title=None, xlabel=None, ylabel=None):
 
 if uploaded_file is not None:
     seq_len = 200
-    offset = 50
     fname = uploaded_file.name
+
+    # 写入临时文件
+    tmpdir = tempfile.mkdtemp()
+    tmp_path = os.path.join(tmpdir, fname)
+    with open(tmp_path, 'wb') as f:
+        f.write(uploaded_file.getbuffer())
+
+    # 自动检测推进器点火起点（第一个 ton>0 的帧，前留 10 帧缓冲）
+    _raw = pd.read_csv(tmp_path)
+    _fire = 0
+    for i in range(min(300, len(_raw))):
+        if _raw['ton'].iloc[i] > 0:
+            _fire = i
+            break
+    offset = max(0, _fire - 10)
 
     matched = metadata[metadata['filename'] == fname]
     if len(matched) > 0:
         meta_row = matched.iloc[0]
-        tmpdir = tempfile.mkdtemp()
-        tmp_path = os.path.join(tmpdir, fname)
-        with open(tmp_path, 'wb') as f:
-            f.write(uploaded_file.getbuffer())
-
         x, y_norm, _ = load_sequence_window(tmp_path, meta_row,
                                             start=offset, seq_len=seq_len)
         x_tensor = torch.from_numpy(x).float().unsqueeze(0)
@@ -770,10 +779,11 @@ if uploaded_file is not None:
             meta = json.load(f)
         ts = meta['thrust_scale']; ms = meta['mfr_max']
         sample_idx = hash(fname) % len(preds_npy)
-        thrust_pred = preds_npy[sample_idx, offset:offset+seq_len, 0] * ts
-        mfr_pred    = preds_npy[sample_idx, offset:offset+seq_len, 1] * ms
-        thrust_true = targets_npy[sample_idx, offset:offset+seq_len, 0] * ts
-        mfr_true    = targets_npy[sample_idx, offset:offset+seq_len, 1] * ms
+        _o = min(offset, preds_npy.shape[1] - seq_len)  # 越界保护
+        thrust_pred = preds_npy[sample_idx, _o:_o+seq_len, 0] * ts
+        mfr_pred    = preds_npy[sample_idx, _o:_o+seq_len, 1] * ms
+        thrust_true = targets_npy[sample_idx, _o:_o+seq_len, 0] * ts
+        mfr_true    = targets_npy[sample_idx, _o:_o+seq_len, 1] * ms
         np.random.seed(42)
         actual_thrust = thrust_true + np.random.normal(0, 0.005, seq_len)
         actual_mfr    = mfr_true    + np.random.normal(0, 0.5,   seq_len)
