@@ -242,7 +242,7 @@ if uploaded_file is not None:
             | 🔹 异常占比 | {as_.get('anomaly_ratio',0)*100:.1f}% | — | {as_.get('level','normal')} |
             """)
         else:
-            st.markdown("> 点击侧边栏 **"一键生成健康报告"** 按钮获取详细诊断。")
+            st.markdown('> 点击侧边栏 **一键生成健康报告** 按钮获取详细诊断。')
 
 else:
     # ---------------- 默认欢迎界面 ----------------
