@@ -212,60 +212,76 @@ def _health_score(value, good, warn, bad, lower_is_better=False):
 
 
 def generate_health_report(thrust, mfr, isp, is_anomaly=None,
-                           thrust_good=1.0, isp_good=150.0):
+                           residual_rms=None):
     """
-    生成推进器健康诊断文字报告。
+    生成推进器健康诊断报告。
+    评分基于**预测精度（残差）**和**异常占比**，而非绝对值阈值。
 
     参数
     ----
-    thrust : float 或 np.ndarray
-        推力均值 (N)
-    mfr : float 或 np.ndarray
-        质量流量均值 (mg/s)
-    isp : float 或 np.ndarray
-        比冲均值 (s)
+    thrust : np.ndarray
+        推力预测序列 (N)
+    mfr : np.ndarray
+        质量流量预测序列 (mg/s)
+    isp : np.ndarray
+        比冲序列 (s)
     is_anomaly : np.ndarray (bool), optional
-        异常步标签
-    thrust_good : float
-        推力"健康"下限
-    isp_good : float
-        比冲"健康"下限
+        异常步标签（残差 > 阈值）
+    residual_rms : float, optional
+        残差均方根（预测精度指标）
 
     返回
     ----
     report : dict
-        包含 summary, thrust_status, mfr_status, isp_status,
-        anomaly_status, overall_health
     """
-    t_mean = np.mean(thrust) if isinstance(thrust, np.ndarray) else thrust
-    m_mean = np.mean(mfr)    if isinstance(mfr, np.ndarray)    else mfr
-    i_mean = np.mean(isp)    if isinstance(isp, np.ndarray)    else isp
+    t_mean = float(np.mean(thrust)) if isinstance(thrust, np.ndarray) else thrust
+    m_mean = float(np.mean(mfr))    if isinstance(mfr, np.ndarray)    else mfr
+    i_mean = float(np.mean(isp))    if isinstance(isp, np.ndarray)    else isp
 
-    t_score, t_level = _health_score(t_mean, thrust_good, 0.6, 0.3)
-    i_score, i_level = _health_score(i_mean, isp_good, 120, 80)
-    m_score = max(0, min(100, 100 - m_mean / 20))
+    # —— 评分逻辑：基于预测精度 ——
+    # 残差越小越健康（如果提供了残差RMS）
+    if residual_rms is not None:
+        acc_score = max(0, min(100, 100 - residual_rms / 0.01 * 20))
+        acc_level = 'good' if acc_score >= 70 else ('warning' if acc_score >= 40 else 'critical')
+    else:
+        acc_score = 100
+        acc_level = 'good'
 
-    anomaly_info = {}
+    # —— 异常占比 ——
+    anomaly_ratio = 0.0
+    anom_level = 'normal'
     if is_anomaly is not None:
-        anomaly_ratio = np.mean(is_anomaly)
-        anomaly_info = {
-            'anomaly_ratio': anomaly_ratio,
-            'n_anomaly': int(is_anomaly.sum()),
-            'total_steps': len(is_anomaly),
-            'level': 'critical' if anomaly_ratio > 0.2 else (
-                     'warning' if anomaly_ratio > 0.05 else 'normal'),
-        }
+        anomaly_ratio = float(np.mean(is_anomaly))
+        anom_level = 'critical' if anomaly_ratio > 0.2 else (
+                     'warning' if anomaly_ratio > 0.05 else 'normal')
 
-    overall = int(0.4 * t_score + 0.3 * i_score + 0.3 * m_score)
-    if anomaly_info.get('level') == 'critical':
-        overall = min(overall, 30)
+    # —— 综合评分：精度权重 0.6 + 异常权重 0.4 ——
+    anom_score = max(0, 100 - anomaly_ratio / 0.2 * 100)
+    overall = int(0.6 * acc_score + 0.4 * anom_score)
+
+    summary_text = '运行正常' if overall >= 70 else '需关注' if overall >= 40 else '建议检修'
+
+    # —— 各指标状态（基于运行数据的统计描述，非评分）——
+    def _desc(v, u):
+        return f'{v:.2f}'.rstrip('0').rstrip('.') if abs(v) < 1 else f'{v:.1f}'.rstrip('0').rstrip('.') if abs(v) < 100 else f'{v:.0f}'
 
     return {
-        'summary': f"推进器健康评分 {overall}/100 —— "
-                   f"{'正常' if overall >= 70 else '需关注' if overall >= 40 else '建议检修'}",
-        'thrust_status':  {'value': f'{t_mean:.2f} N',  'score': int(t_score), 'level': t_level},
-        'mfr_status':     {'value': f'{m_mean:.1f} mg/s','score': int(m_score), 'level': 'normal' if m_score >= 70 else 'warning'},
-        'isp_status':     {'value': f'{i_mean:.1f} s',   'score': int(i_score), 'level': i_level},
-        'anomaly_status': anomaly_info,
+        'summary': f"综合健康评分 {overall}/100 —— {summary_text}",
+        'prediction_accuracy': {
+            'score': int(acc_score),
+            'level': acc_level,
+            'detail': f'预测残差 {residual_rms:.4f} N' if residual_rms else '正常'
+        },
+        'anomaly_status': {
+            'anomaly_ratio': anomaly_ratio,
+            'n_anomaly': int(is_anomaly.sum()) if is_anomaly is not None else 0,
+            'total_steps': len(is_anomaly) if is_anomaly is not None else 0,
+            'level': anom_level,
+        },
+        'telemetry': {
+            'thrust': f'{_desc(t_mean, "N")} N',
+            'mfr':    f'{_desc(m_mean, "mg/s")} mg/s',
+            'isp':    f'{_desc(i_mean, "s")} s',
+        },
         'overall_health': overall,
     }

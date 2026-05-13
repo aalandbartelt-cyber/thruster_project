@@ -895,11 +895,14 @@ if uploaded_file is not None:
     if generate_report:
         section_header("健康诊断报告", "DIAGNOSTIC REPORT")
         with st.spinner("正在生成诊断报告..."):
+            residual_rms = float(np.sqrt(np.mean(residuals**2)))
             report = generate_health_report(thrust_pred, mfr_pred, isp,
-                                            is_anomaly=is_anomaly)
+                                            is_anomaly=is_anomaly,
+                                            residual_rms=residual_rms)
 
-        ts_, ms_, is_st = report['thrust_status'], report['mfr_status'], report['isp_status']
+        pa  = report.get('prediction_accuracy', {})
         anom = report.get('anomaly_status', {})
+        tel  = report.get('telemetry', {})
         overall = report['overall_health']
 
         def _bar(score):
@@ -916,41 +919,35 @@ if uploaded_file is not None:
         st.markdown(f"""
         <div class="report-card">
             <div class="report-summary">
-                <span class="score">{overall}/100</span>综合健康评分
+                <span class="score">{overall}/100</span> 综合健康评分
                 &nbsp;&nbsp;<span style="color:{TEXT_DIM};font-weight:400;font-size:14px;">|</span>&nbsp;&nbsp;
                 <span style="color:{TEXT_PRIMARY};font-weight:600;font-size:15px;">{report['summary']}</span>
             </div>
             <table class="report-table">
                 <thead>
                     <tr>
-                        <th style="width:25%;">监控指标</th>
-                        <th style="width:18%;">实测数值</th>
-                        <th style="width:32%;">健康评分</th>
-                        <th style="width:25%;">状态等级</th>
+                        <th style="width:25%;">评估维度</th>
+                        <th style="width:25%;">指标</th>
+                        <th style="width:25%;">评分</th>
+                        <th style="width:25%;">状态</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
-                        <td>推力 Thrust</td>
-                        <td>{ts_['value']}</td>
-                        <td>{_bar(ts_['score'])} {ts_['score']}/100</td>
-                        <td>{_badge(ts_['level'])}</td>
+                        <td>预测精度</td>
+                        <td>残差 RMS = {residual_rms:.4f} N</td>
+                        <td>{_bar(pa.get('score',0))} {pa.get('score',0)}/100</td>
+                        <td>{_badge(pa.get('level','normal'))}</td>
                     </tr>
                     <tr>
-                        <td>质量流量 Mass Flow</td>
-                        <td>{ms_['value']}</td>
-                        <td>{_bar(ms_['score'])} {ms_['score']}/100</td>
-                        <td>{_badge(ms_['level'])}</td>
+                        <td>当前遥测</td>
+                        <td>推力 {tel.get('thrust','-')} · Isp {tel.get('isp','-')}</td>
+                        <td style="color:{TEXT_DIM};">━━━</td>
+                        <td style="color:{TEXT_DIM};font-size:12px;">运行数据</td>
                     </tr>
                     <tr>
-                        <td>比冲 Specific Impulse</td>
-                        <td>{is_st['value']}</td>
-                        <td>{_bar(is_st['score'])} {is_st['score']}/100</td>
-                        <td>{_badge(is_st['level'])}</td>
-                    </tr>
-                    <tr>
-                        <td>异常点占比 Anomaly</td>
-                        <td>{anom_ratio_pct:.2f} %</td>
+                        <td>异常检测</td>
+                        <td>{anom.get('n_anomaly',0)} / {anom.get('total_steps',200)} 步异常</td>
                         <td style="color:{TEXT_DIM};">━━━</td>
                         <td>{_badge(anom_level)}</td>
                     </tr>
