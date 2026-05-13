@@ -918,20 +918,27 @@ if uploaded_file is not None:
     plt.tight_layout(pad=2.0)
     render_fig(fig2)
 
-    # ── 异常状态条 ──
-    if is_anomaly.any():
+    # ── 三维异常状态 ──
+    mfr_anom = mfr_residuals > mfr_threshold
+    isp_anom = isp_residuals > isp_threshold
+    any_anom = is_anomaly.any() or mfr_anom.any() or isp_anom.any()
+
+    if any_anom:
+        _parts = []
+        if is_anomaly.any(): _parts.append(f'推力 {int(is_anomaly.sum())}步')
+        if mfr_anom.any():   _parts.append(f'流量 {int(mfr_anom.sum())}步')
+        if isp_anom.any():   _parts.append(f'比冲 {int(isp_anom.sum())}步')
         st.markdown(f"""
         <div class="status-bar alert">
             <span class="title">▲ 检测到异常</span>
-            共 <span class="num">{int(is_anomaly.sum())}</span> 个时间步推力残差超过 {threshold:.1f} N 阈值，
-            异常占比 <span class="num">{anomaly_ratio*100:.2f}%</span>
+            {' / '.join(_parts)} 超过阈值
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown(f"""
         <div class="status-bar nominal">
             <span class="title">● 系统运行正常</span>
-            推力残差全程低于 {threshold:.1f} N 阈值
+            推力 · 流量 · 比冲 三维残差均在阈值范围内
         </div>
         """, unsafe_allow_html=True)
 
@@ -971,7 +978,7 @@ if uploaded_file is not None:
                 <tbody>
                     <tr><td>预测精度</td><td>残差 RMS = {residual_rms:.4f} N</td><td>{_bar(pa.get('score',0))} {pa.get('score',0)}/100</td><td>{_badge(pa.get('level','normal'))}</td></tr>
                     <tr><td>异常检测</td><td>{anom.get('n_anomaly',0)} / {anom.get('total_steps',200)} 步 ({anom_ratio_pct:.1f}%)</td><td>{_bar(int(anom_score))} {int(anom_score)}/100</td><td>{_badge(anom_level)}</td></tr>
-                    <tr><td>模型置信度</td><td>MC Dropout 不确定性评估</td><td>{_bar(model_conf)} {model_conf}/100</td><td>{_badge(conf_level)}</td></tr>
+                    <tr><td>模型置信度</td><td>MC Dropout 采样 20 次的变异系数<br><span style="font-size:11px;color:{TEXT_DIM};">反映模型对当前输入的确定性，数据分布变化时置信度自然降低，不影响预测精度</span></td><td>{_bar(model_conf)} {model_conf}/100</td><td>{_badge(conf_level)}</td></tr>
                     <tr style="border-top:2px solid {BORDER};">
                         <td colspan="4" style="font-size:11px;color:{TEXT_DIM};padding:14px 8px;line-height:1.7;">
                             <span style="font-weight:700;color:#E8ECEF;font-size:15px;">▌ 评分规则 Scoring Rules</span><br>
