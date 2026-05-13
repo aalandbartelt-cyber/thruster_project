@@ -3,8 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['Droid Sans Fallback', 'SimHei', 'DejaVu Sans']
+# 图表全部使用英文标签（WSL matplotlib 中文字体渲染有问题）
 plt.rcParams['axes.unicode_minus'] = False
 import pandas as pd
 import torch
@@ -176,34 +175,34 @@ if uploaded_file is not None:
     color_isp = '#2ca02c'
 
     # ---- 推力图 ----
-    ax1.plot(time_axis, actual_thrust, color=color_actual, linewidth=2, label='传感器实测')
-    ax1.plot(time_axis, thrust_pred, color=color_pred, linestyle='--', linewidth=2, label='AI预测基准')
+    ax1.plot(time_axis, actual_thrust, color=color_actual, linewidth=2, label='Actual (sensor)')
+    ax1.plot(time_axis, thrust_pred, color=color_pred, linestyle='--', linewidth=2, label='AI Prediction')
     ax1.fill_between(time_axis, 0, max(actual_thrust)*1.15,
-                     where=is_anomaly, color='red', alpha=0.25, label='异常区间')
-    ax1.set_title('推力 (Thrust)', fontweight='bold', color='#003057')
-    ax1.set_ylabel('牛顿 (N)')
+                     where=is_anomaly, color='red', alpha=0.25, label='Anomaly')
+    ax1.set_title('Thrust', fontweight='bold', color='#003057')
+    ax1.set_ylabel('Newton (N)')
     ax1.legend(loc='upper right', fontsize=8)
     ax1.grid(True, linestyle=':', alpha=0.5)
 
     # ---- 质量流量图 ----
-    ax2.plot(time_axis, actual_mfr, color=color_actual, linewidth=2, label='传感器实测')
-    ax2.plot(time_axis, mfr_pred, color=color_pred, linestyle='--', linewidth=2, label='AI预测基准')
-    ax2.set_title('质量流量 (MFR)', fontweight='bold', color='#003057')
+    ax2.plot(time_axis, actual_mfr, color=color_actual, linewidth=2, label='Actual (sensor)')
+    ax2.plot(time_axis, mfr_pred, color=color_pred, linestyle='--', linewidth=2, label='AI Prediction')
+    ax2.set_title('Mass Flow Rate (MFR)', fontweight='bold', color='#003057')
     ax2.set_ylabel('mg/s')
     ax2.legend(loc='upper right', fontsize=8)
     ax2.grid(True, linestyle=':', alpha=0.5)
 
     # ---- 比冲图 ----
-    ax3.plot(time_axis, isp, color=color_isp, linewidth=2.5, label='实时比冲')
-    ax3.axhline(150, color='#d62728', linestyle=':', linewidth=2, label='最低健康值 (150 s)')
-    ax3.set_title('比冲 (Isp)', fontweight='bold', color='#003057')
-    ax3.set_ylabel('秒 (s)')
+    ax3.plot(time_axis, isp, color=color_isp, linewidth=2.5, label='Isp (real-time)')
+    ax3.axhline(150, color='#d62728', linestyle=':', linewidth=2, label='Min healthy (150 s)')
+    ax3.set_title('Specific Impulse (Isp)', fontweight='bold', color='#003057')
+    ax3.set_ylabel('Second (s)')
     ax3.legend(loc='upper right', fontsize=8)
     ax3.grid(True, linestyle=':', alpha=0.5)
 
     # 统一样式
     for ax in (ax1, ax2, ax3):
-        ax.set_xlabel('时间步', fontsize=9)
+        ax.set_xlabel('Time step', fontsize=9)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
 
