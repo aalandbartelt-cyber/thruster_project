@@ -965,13 +965,13 @@ if uploaded_file is not None:
                             <b style="color:#FFB627;">① 预测精度</b> &nbsp;&nbsp;
                             r = RMS / RMSE₀ · (RMSE₀ = 0.0832 N)<br>
                             <span style="padding-left:2em;">
-                            Score = { 100, r ≤ 1.5 &nbsp;|&nbsp; 80 − 40(r−1.5)/1.5, 1.5 < r ≤ 3 &nbsp;|&nbsp; 40 − 30(r−3)/2, 3 < r ≤ 5 &nbsp;|&nbsp; 10, r > 5 }
+                            Score = {{ 100, r ≤ 1.5 &nbsp;|&nbsp; 80 − 40(r−1.5)/1.5, 1.5 < r ≤ 3 &nbsp;|&nbsp; 40 − 30(r−3)/2, 3 < r ≤ 5 &nbsp;|&nbsp; 10, r > 5 }}
                             </span><br>
                             <b style="color:#FFB627;">② 异常检测</b> &nbsp;&nbsp;
                             a = anomaly_ratio &nbsp; → &nbsp; Score = max(0, 100 − 500a)<br>
                             <b style="color:#FFB627;">③ 模型置信度</b> &nbsp;&nbsp;
                             c = σ/μ &nbsp; (MC Dropout ×20) &nbsp; → &nbsp;
-                            Score = { 98, c < 0.03 &nbsp;|&nbsp; 85, c < 0.08 &nbsp;|&nbsp; 65, c < 0.15 &nbsp;|&nbsp; 40, c < 0.30 &nbsp;|&nbsp; 20, c ≥ 0.30 }<br>
+                            Score = {{ 98, c < 0.03 &nbsp;|&nbsp; 85, c < 0.08 &nbsp;|&nbsp; 65, c < 0.15 &nbsp;|&nbsp; 40, c < 0.30 &nbsp;|&nbsp; 20, c ≥ 0.30 }}<br>
                             <b style="color:#FC3D21;font-size:15px;">Overall = 0.4 · S<sub>pred</sub> + 0.3 · S<sub>anom</sub> + 0.3 · S<sub>conf</sub></b>
                             </span>
                         </td>
