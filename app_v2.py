@@ -868,21 +868,21 @@ if uploaded_file is not None:
     ax1.legend(loc='upper right')
     ax1.grid(True, axis='y')
     apply_cn_to_axis(ax1, title='推力 · THRUST',
-                     xlabel='时间步', ylabel='推力 (N)')
+                     xlabel='时间步 (0.01s)', ylabel='推力 (N)')
 
     ax2.plot(t_axis, actual_mfr, color=DATA_CYAN,  lw=2.0, label='传感器实测')
     ax2.plot(t_axis, mfr_pred,   color=DATA_AMBER, lw=1.4, ls='--', label='AI 预测基准')
     ax2.legend(loc='upper right')
     ax2.grid(True, axis='y')
     apply_cn_to_axis(ax2, title='质量流量 · MASS FLOW RATE',
-                     xlabel='时间步', ylabel='流量 (mg/s)')
+                     xlabel='时间步 (0.01s)', ylabel='流量 (mg/s)')
 
     ax3.plot(t_axis, isp, color=DATA_VIOLET, lw=2.4, label='实时比冲')
     ax3.axhline(np.mean(isp), color=NASA_RED, ls=':', lw=1.2, alpha=0.5, label=f'均值 {np.mean(isp):.0f} s')
     ax3.legend(loc='upper right')
     ax3.grid(True, axis='y')
     apply_cn_to_axis(ax3, title='比冲 · SPECIFIC IMPULSE',
-                     xlabel='时间步', ylabel='比冲 (s)')
+                     xlabel='时间步 (0.01s)', ylabel='比冲 (s)')
 
     plt.tight_layout(pad=2.0)
     render_fig(fig)
@@ -900,7 +900,7 @@ if uploaded_file is not None:
     axr.legend(loc='upper right')
     axr.grid(True, axis='y')
     apply_cn_to_axis(axr, title='推力残差实时监控 · RESIDUAL MONITOR',
-                     xlabel='时间步', ylabel='残差 (N)')
+                     xlabel='时间步 (0.01s)', ylabel='残差 (N)')
 
     plt.tight_layout(pad=1.5)
     render_fig(fig2)
