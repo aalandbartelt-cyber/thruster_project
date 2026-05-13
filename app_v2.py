@@ -3,10 +3,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
-from matplotlib.font_manager import FontProperties
 # 设置中文字体
-_FONT = FontProperties(fname='/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf')
-plt.rcParams['font.family'] = 'Droid Sans Fallback'
+plt.rcParams['font.sans-serif'] = ['Droid Sans Fallback', 'SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 import pandas as pd
 import torch
@@ -17,7 +15,7 @@ from inference_utils import (
     compute_residuals,
     generate_health_report,
 )
-from data_pipeline_v2 import load_sequence, THRUST_SCALE, MFR_MAX
+from data_pipeline_v2 import load_sequence_window, THRUST_SCALE, MFR_MAX
 
 # ---------------- 页面配置 ----------------
 st.set_page_config(
@@ -104,6 +102,7 @@ st.caption("双输出 Attention‑LSTM   |   17维特征融合   |   比冲实�
 
 if uploaded_file is not None:
     seq_len = 200
+    offset = 50  # 跳过前 50 步（推进器未点火阶段）
     fname = uploaded_file.name
 
     # ----- 方式一：在 metadata.csv 中找到该文件 → 用 load_sequence + 模型推理 -----
@@ -117,8 +116,8 @@ if uploaded_file is not None:
         with open(tmp_path, 'wb') as f:
             f.write(uploaded_file.getbuffer())
 
-        # load_sequence 返回 17 维特征 + 标签（已归一化）+ 异常标签
-        x, y_norm, labels_seq = load_sequence(tmp_path, meta_row, seq_len=seq_len)
+        # load_sequence_window 跳过前 offset 步（避开未点火段）
+        x, y_norm, labels_seq = load_sequence_window(tmp_path, meta_row, start=offset, seq_len=seq_len)
         x_tensor = torch.from_numpy(x).float().unsqueeze(0)  # [1, 200, 17]
 
         # 模型推理
@@ -146,10 +145,10 @@ if uploaded_file is not None:
             meta = json.load(f)
         ts = meta['thrust_scale']; ms = meta['mfr_max']
         sample_idx = hash(fname) % len(preds_npy)
-        thrust_pred = preds_npy[sample_idx, :, 0] * ts
-        mfr_pred = preds_npy[sample_idx, :, 1] * ms
-        thrust_true = targets_npy[sample_idx, :, 0] * ts
-        mfr_true = targets_npy[sample_idx, :, 1] * ms
+        thrust_pred = preds_npy[sample_idx, offset:offset+seq_len, 0] * ts
+        mfr_pred = preds_npy[sample_idx, offset:offset+seq_len, 1] * ms
+        thrust_true = targets_npy[sample_idx, offset:offset+seq_len, 0] * ts
+        mfr_true = targets_npy[sample_idx, offset:offset+seq_len, 1] * ms
         np.random.seed(42)
         actual_thrust = thrust_true + np.random.normal(0, 0.005, seq_len)
         actual_mfr = mfr_true + np.random.normal(0, 0.5, seq_len)
@@ -236,9 +235,9 @@ if uploaded_file is not None:
 
             | 指标 | 数值 | 评分 | 状态 |
             |:----|:----|:---:|:----:|
-            | 🔹 推力 Thrust | {ts['value']} | {ts['score']}/100 | {'🟢' if ts['level']=='good' else '🟡' if ts['level']=='warning' else '🔴'} {ts['level']} |
-            | 🔹 质量流量 MFR | {ms['value']} | {ms['score']}/100 | {'🟢' if ms['level']=='good' else '🟡' if ms['level']=='warning' else '🔴'} {ms['level']} |
-            | 🔹 比冲 Isp | {is_['value']} | {is_['score']}/100 | {'🟢' if is_['level']=='good' else '🟡' if is_['level']=='warning' else '🔴'} {is_['level']} |
+            | 🔹 推力 Thrust | {ts['value']} | {ts['score']}/100 | {'🟢' if ts['level'] in ('good','normal') else '🟡' if ts['level']=='warning' else '🔴'} {ts['level']} |
+            | 🔹 质量流量 MFR | {ms['value']} | {ms['score']}/100 | {'🟢' if ms['level'] in ('good','normal') else '🟡' if ms['level']=='warning' else '🔴'} {ms['level']} |
+            | 🔹 比冲 Isp | {is_['value']} | {is_['score']}/100 | {'🟢' if is_['level'] in ('good','normal') else '🟡' if is_['level']=='warning' else '🔴'} {is_['level']} |
             | 🔹 异常占比 | {as_.get('anomaly_ratio',0)*100:.1f}% | — | {as_.get('level','normal')} |
             """)
         else:
