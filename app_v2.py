@@ -848,7 +848,7 @@ if uploaded_file is not None:
                      xlabel='时间步', ylabel='流量 (mg/s)')
 
     ax3.plot(t_axis, isp, color=DATA_VIOLET, lw=2.4, label='实时比冲')
-    ax3.axhline(150, color=NASA_RED, ls=':', lw=1.8, label='健康阈值 150 s')
+    ax3.axhline(np.mean(isp), color=NASA_RED, ls=':', lw=1.2, alpha=0.5, label=f'均值 {np.mean(isp):.0f} s')
     ax3.legend(loc='upper right')
     ax3.grid(True, axis='y')
     apply_cn_to_axis(ax3, title='比冲 · SPECIFIC IMPULSE',
