@@ -915,6 +915,8 @@ if uploaded_file is not None:
 
         anom_ratio_pct = anom.get('anomaly_ratio', 0) * 100
         anom_level     = anom.get('level', 'normal')
+        # 异常评分：0%异常=100分，20%异常=0分
+        anom_score = max(0, min(100, 100 - anom_ratio_pct / 20 * 100))
 
         st.markdown(f"""
         <div class="report-card">
@@ -940,13 +942,21 @@ if uploaded_file is not None:
                         <td>{_badge(pa.get('level','normal'))}</td>
                     </tr>
                     <tr>
-                        <td>当前遥测</td>
-                        <td>推力 {tel.get('thrust','-')} · Isp {tel.get('isp','-')}</td>
-                        <td style="color:{TEXT_DIM};">━━━</td>
-                        <td style="color:{TEXT_DIM};font-size:12px;">运行数据</td>
+                        <td>异常检测</td>
+                        <td>{anom.get('n_anomaly',0)} / {anom.get('total_steps',200)} 步 (占比 {anom_ratio_pct:.1f}%)</td>
+                        <td>{_bar(int(anom_score))} {int(anom_score)}/100</td>
+                        <td>{_badge(anom_level)}</td>
                     </tr>
                     <tr>
-                        <td>异常检测</td>
+                        <td>当前遥测</td>
+                        <td>推力 {tel.get('thrust','-')} · Isp {tel.get('isp','-')}</td>
+                        <td style="color:{TEXT_DIM};">参考值</td>
+                        <td style="color:{TEXT_DIM};font-size:12px;">{_badge(anom_level)}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        """, unsafe_allow_html=True)
                         <td>{anom.get('n_anomaly',0)} / {anom.get('total_steps',200)} 步异常</td>
                         <td style="color:{TEXT_DIM};">━━━</td>
                         <td>{_badge(anom_level)}</td>
