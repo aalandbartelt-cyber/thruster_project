@@ -122,7 +122,7 @@ if uploaded_file is not None:
 
     # 计算比冲（Isp），将 mfr 从 mg/s 转换为 kg/s
     g0 = 9.80665
-    isp = thrust_pred / (mfr_pred * 1e-3 * g0)
+    isp = thrust_pred / (mfr_pred * 1e-6 * g0)
 
     # 注意：这里的 thrust, mfr, isp 已经是 numpy 数组，形状 (200,)，
     # 后面的 compute_residuals 和报告生成可直接使用。
@@ -197,7 +197,9 @@ if uploaded_file is not None:
     with right_col:
         if generate_report:
             with st.spinner("正在生成健康诊断报告..."):
-                report = generate_health_report(thrust, mfr, isp, is_anomaly=is_anomaly)
+                report = generate_health_report(thrust, mfr, isp, is_anomaly=is_anomaly,
+                                thrust_good=0.3,   # 原来默认1.0，改为0.3
+                                isp_good=60.0)     # 原来默认150.0，改为90.0
             st.info("📋 诊断报告已生成")
             st.json(report)
         else:
