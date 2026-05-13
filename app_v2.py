@@ -889,20 +889,20 @@ if uploaded_file is not None:
     plt.tight_layout(pad=1.5)
     render_fig(fig2)
 
+    # ── 异常状态条 ──
     if is_anomaly.any():
         st.markdown(f"""
         <div class="status-bar alert">
             <span class="title">▲ 检测到异常</span>
             共 <span class="num">{int(is_anomaly.sum())}</span> 个时间步推力残差超过 {threshold:.1f} N 阈值，
-            异常占比 <span class="num">{anomaly_ratio*100:.2f}%</span>，
-            建议立即检查催化床状态
+            异常占比 <span class="num">{anomaly_ratio*100:.2f}%</span>
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown(f"""
         <div class="status-bar nominal">
             <span class="title">● 系统运行正常</span>
-            推力残差全程低于 {threshold:.1f} N 阈值，推进器各项运行参数均在健康范围内
+            推力残差全程低于 {threshold:.1f} N 阈值
         </div>
         """, unsafe_allow_html=True)
 
@@ -914,26 +914,19 @@ if uploaded_file is not None:
                                             is_anomaly=is_anomaly,
                                             residual_rms=residual_rms)
 
-        pa     = report.get('prediction_accuracy', {})
-        anom   = report.get('anomaly_status', {})
-        tel    = report.get('telemetry', {})
+        pa      = report.get('prediction_accuracy', {})
+        anom    = report.get('anomaly_status', {})
         overall = report['overall_health']
-
-        # 置信度评分等级
         conf_level = 'good' if model_conf >= 70 else ('warning' if model_conf >= 40 else 'critical')
 
-        def _bar(score):
-            return (f'<span class="score-bar">'
-                    f'<span class="score-fill" style="width:{score}%"></span>'
-                    f'</span>')
-
-        def _badge(level):
-            return f'<span class="level-{level}">● {level.upper()}</span>'
+        def _bar(s):
+            return f'<span class="score-bar"><span class="score-fill" style="width:{s}%"></span></span>'
+        def _badge(lv):
+            return f'<span class="level-{lv}">● {lv.upper()}</span>'
 
         anom_ratio_pct = anom.get('anomaly_ratio', 0) * 100
         anom_level     = anom.get('level', 'normal')
-        # 异常评分：0%异常=100分，20%异常=0分
-        anom_score = max(0, min(100, 100 - anom_ratio_pct / 20 * 100))
+        anom_score     = max(0, min(100, 100 - anom_ratio_pct / 20 * 100))
 
         st.markdown(f"""
         <div class="report-card">
@@ -944,39 +937,20 @@ if uploaded_file is not None:
             </div>
             <table class="report-table">
                 <thead>
-                    <tr>
-                        <th style="width:22%;">评估维度</th>
-                        <th style="width:28%;">指标</th>
-                        <th style="width:25%;">评分</th>
-                        <th style="width:25%;">状态</th>
-                    </tr>
+                    <tr><th style="width:22%;">评估维度</th><th style="width:28%;">指标</th><th style="width:25%;">评分</th><th style="width:25%;">状态</th></tr>
                 </thead>
                 <tbody>
-                    <tr>
-                        <td>预测精度</td>
-                        <td>残差 RMS = {residual_rms:.4f} N</td>
-                        <td>{_bar(pa.get('score',0))} {pa.get('score',0)}/100</td>
-                        <td>{_badge(pa.get('level','normal'))}</td>
-                    </tr>
-                    <tr>
-                        <td>异常检测</td>
-                        <td>{anom.get('n_anomaly',0)} / {anom.get('total_steps',200)} 步 ({anom_ratio_pct:.1f}%)</td>
-                        <td>{_bar(int(anom_score))} {int(anom_score)}/100</td>
-                        <td>{_badge(anom_level)}</td>
-                    </tr>
-                    <tr>
-                        <td>模型置信度</td>
-                        <td>MC Dropout 不确定性评估</td>
-                        <td>{_bar(model_conf)} {model_conf}/100</td>
-                        <td>{_badge(conf_level)}</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        """, unsafe_allow_html=True)
-                        <td>{anom.get('n_anomaly',0)} / {anom.get('total_steps',200)} 步异常</td>
-                        <td style="color:{TEXT_DIM};">━━━</td>
-                        <td>{_badge(anom_level)}</td>
+                    <tr><td>预测精度</td><td>残差 RMS = {residual_rms:.4f} N</td><td>{_bar(pa.get('score',0))} {pa.get('score',0)}/100</td><td>{_badge(pa.get('level','normal'))}</td></tr>
+                    <tr><td>异常检测</td><td>{anom.get('n_anomaly',0)} / {anom.get('total_steps',200)} 步 ({anom_ratio_pct:.1f}%)</td><td>{_bar(int(anom_score))} {int(anom_score)}/100</td><td>{_badge(anom_level)}</td></tr>
+                    <tr><td>模型置信度</td><td>MC Dropout 不确定性评估</td><td>{_bar(model_conf)} {model_conf}/100</td><td>{_badge(conf_level)}</td></tr>
+                    <tr style="border-top:2px solid {PANEL_BORDER};">
+                        <td colspan="4" style="font-size:11px;color:{TEXT_DIM};padding:14px 8px;line-height:1.7;">
+                            <span style="font-weight:600;color:{TEXT_SECONDARY};">评分规则：</span><br>
+                            ① 预测精度 —— 基于推力残差 RMS，以模型测试 RMSE（0.0832 N）为基准。RMS ≤ 1.5×RMSE 得满分，≤ 3×RMSE 得 80~100 分。<br>
+                            ② 异常检测 —— 基于残差超过阈值的步数占比。0% 异常得满分，20% 及以上得 0 分。<br>
+                            ③ 模型置信度 —— 基于 MC Dropout ×20 次推理的变异系数（CV = 标准差/均值）。CV 越小置信度越高。<br>
+                            <span style="color:{NASA_RED};font-weight:500;">综合 = 精度×0.4 + 异常×0.3 + 置信×0.3</span>
+                        </td>
                     </tr>
                 </tbody>
             </table>
