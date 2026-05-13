@@ -1005,29 +1005,29 @@ else:
 # SHAP 归因分析面板
 # ════════════════════════════════════════════════════════════════════
 
-    if shap_data is not None:
-        section_header("SHAP 特征归因分析", "ATTRIBUTION ANALYSIS")
-        col_s1, col_s2, col_s3 = st.columns(3)
-        for _col, _key, _title, _color in [
-            (col_s1, 'thrust', '推力 Thrust', '#e74c3c'),
-            (col_s2, 'mfr',    '质量流量 MFR', '#3498db'),
-            (col_s3, 'thrust', '比冲 Isp', '#2ecc71'),  # reuse thrust as placeholder
-        ]:
-            with _col:
-                _vals = shap_data[_key]
-                _idx = np.argsort(_vals)[-7:]  # top 7
-                _fig, _ax = plt.subplots(figsize=(4.5, 3.5))
-                _ax.barh(range(len(_idx)), _vals[_idx], color=_color, alpha=0.8, height=0.6)
-                _ax.set_yticks(range(len(_idx)))
-                _ax.set_yticklabels([shap_data['feats'][i] for i in _idx], fontsize=8)
-                _ax.invert_yaxis()
-                _ax.set_title(_title, fontsize=11, fontweight='bold', color=TEXT_PRIMARY)
-                _ax.tick_params(colors=TEXT_SECONDARY)
-                for _b, _v in zip(_ax.containers[0], _vals[_idx]):
-                    _ax.text(_b.get_width()*1.02, _b.get_y()+_b.get_height()/2,
-                             f'{_v:.2e}', va='center', fontsize=7, color=TEXT_PRIMARY)
-                plt.tight_layout()
-                render_fig(_fig)
+if shap_data is not None:
+    section_header("SHAP 特征归因分析", "ATTRIBUTION ANALYSIS")
+    col_s1, col_s2, col_s3 = st.columns(3)
+    for _col, _key, _title, _color in [
+        (col_s1, 'thrust', '推力 Thrust', '#e74c3c'),
+        (col_s2, 'mfr',    '质量流量 MFR', '#3498db'),
+        (col_s3, 'thrust', '比冲 Isp', '#2ecc71'),  # reuse thrust as placeholder
+    ]:
+        with _col:
+            _vals = shap_data[_key]
+            _idx = np.argsort(_vals)[-7:]  # top 7
+            _fig, _ax = plt.subplots(figsize=(4.5, 3.5))
+            _ax.barh(range(len(_idx)), _vals[_idx], color=_color, alpha=0.8, height=0.6)
+            _ax.set_yticks(range(len(_idx)))
+            _ax.set_yticklabels([shap_data['feats'][i] for i in _idx], fontsize=8)
+            _ax.invert_yaxis()
+            _ax.set_title(_title, fontsize=11, fontweight='bold', color=TEXT_PRIMARY)
+            _ax.tick_params(colors=TEXT_SECONDARY)
+            for _b, _v in zip(_ax.containers[0], _vals[_idx]):
+                _ax.text(_b.get_width()*1.02, _b.get_y()+_b.get_height()/2,
+                         f'{_v:.2e}', va='center', fontsize=7, color=TEXT_PRIMARY)
+            plt.tight_layout()
+            render_fig(_fig)
 
 # ════════════════════════════════════════════════════════════════════
 # 八、Footer
