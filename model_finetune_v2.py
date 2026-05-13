@@ -301,7 +301,7 @@ def main():
                     if osn == sn: continue
                     df_osn = df_normal[df_normal['sn'] == osn]
                     df_osn_test = df_osn[~df_osn['filename'].isin(train_files)]
-                    t_osn, _, _ = eval_many(model, df_osn_test.head(10), test_dir,
+                    t_osn, _, _ = eval_many(model, df_osn_test.head(args.forget_n_files), test_dir,
                                             args.seq_len, args.stride, device)
                     forget_t.append(t_osn)
                 forget_mean = np.mean(forget_t)
