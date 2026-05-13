@@ -607,7 +607,7 @@ def load_metadata():
 
 
 @st.cache_resource
-def load_shap():
+def load_shap_data():
     _d = "outputs/predictions/v2"
     _f = ['ton','vl','test_pressure','cumulated_on_time','cumulated_throughput',
           'cumulated_pulses','ssf','health_check','ramp1','ramp2','ramp3','ramp4',
@@ -623,7 +623,7 @@ def load_shap():
 
 model = load_model()
 metadata = load_metadata()
-shap_data = load_shap()
+shap_data = load_shap_data()
 
 
 # ════════════════════════════════════════════════════════════════════
