@@ -787,7 +787,7 @@ if uploaded_file is not None:
         np.random.seed(42)
         actual_thrust = thrust_true + np.random.normal(0, 0.005, seq_len)
         actual_mfr    = mfr_true    + np.random.normal(0, 0.5,   seq_len)
-        isp = thrust_pred / (mfr_pred * 1e-3 * 9.80665 + 1e-8)
+        isp = thrust_pred / (mfr_pred * 1e-6 * 9.80665 + 1e-8)
         source_label = "缓存预测回放"
 
     residuals, is_anomaly, anomaly_ratio = compute_residuals(

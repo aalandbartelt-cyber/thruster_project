@@ -89,7 +89,7 @@ def predict(model, x_tensor, device=None):
     thrust = out[:, :, 0].cpu().numpy() * THRUST_SCALE
     mfr    = out[:, :, 1].cpu().numpy() * MFR_MAX
     eps    = 1e-8
-    isp    = thrust / (mfr * G0 * 1e-3 + eps)
+    isp    = thrust / (mfr * G0 * 1e-6 + eps)
 
     if single:
         thrust, mfr, isp = thrust[0], mfr[0], isp[0]
@@ -147,7 +147,7 @@ def predict_with_uncertainty(model, x_tensor, n_samples=30, device=None):
     mfr_std     = mfr_arr.std(axis=0)
 
     eps = 1e-8
-    isp_mean = thrust_mean / (mfr_mean * G0 * 1e-3 + eps)
+    isp_mean = thrust_mean / (mfr_mean * G0 * 1e-6 + eps)
     isp_std  = isp_mean * np.sqrt(
         (thrust_std / (thrust_mean + eps))**2 +
         (mfr_std   / (mfr_mean + eps))**2
