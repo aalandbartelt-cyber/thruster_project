@@ -615,6 +615,7 @@ def load_shap():
     try:
         st = np.load(f"{_d}/shap_thrust.npy")
         sm = np.load(f"{_d}/shap_mfr.npy")
+        si = np.load(f"{_d}/shap_isp.npy")
         return {'thrust': np.abs(st).mean(0), 'mfr': np.abs(sm).mean(0), 'feats': _f}
     except Exception:
         return None
@@ -1011,7 +1012,7 @@ if shap_data is not None:
     for _col, _key, _title, _color in [
         (col_s1, 'thrust', '推力 Thrust', '#e74c3c'),
         (col_s2, 'mfr',    '质量流量 MFR', '#3498db'),
-        (col_s3, 'thrust', '比冲 Isp', '#2ecc71'),  # reuse thrust as placeholder
+        (col_s3, 'isp', '比冲 Isp', '#2ecc71'),  # reuse thrust as placeholder
     ]:
         with _col:
             _vals = shap_data[_key]
