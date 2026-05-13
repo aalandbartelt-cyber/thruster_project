@@ -120,6 +120,13 @@ def setup_matplotlib_theme():
 
 setup_matplotlib_theme()
 
+# 图像资源（Base64 内嵌，解决 streamlit 不支持本地路径问题）
+_IMG_SHU  = ''
+_IMG_CASC = ''
+for _p, _k in [('assets/shu.png','_IMG_SHU'), ('assets/my_logo.png','_IMG_CASC')]:
+    if os.path.exists(_p):
+        import base64; _b = base64.b64encode(open(_p,'rb').read()).decode()
+        globals()[_k] = f'data:image/png;base64,{_b}'
 
 # ════════════════════════════════════════════════════════════════════
 # 三、Streamlit + CSS
@@ -557,9 +564,9 @@ section[data-testid="stSidebar"] {{
 
 st.markdown(f"""
 <div class="mission-header">
-    <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;">
-        <img src="assets/shu.png" style="height:58px;border-radius:0;">
-        <img src="assets/my_logo.png" style="height:50px;border-radius:0;">
+    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+        <img src="{_IMG_SHU}" style="height:56px;">
+        <img src="{_IMG_CASC}" style="height:48px;">
     </div>
     <div class="mission-title-block">
         <div class="mission-title-en">MONOPROPELLANT THRUSTER DIGITAL TWIN</div>
