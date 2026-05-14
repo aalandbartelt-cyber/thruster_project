@@ -100,8 +100,8 @@ def eval_full(model, df_row, data_dir, seq_len=200, stride=200, device='cpu'):
     tt = np.concatenate(trues_t); tm = np.concatenate(trues_m)
     t_rmse = np.sqrt(np.mean((pt - tt)**2)) * THRUST_SCALE
     m_rmse = np.sqrt(np.mean((pm - tm)**2)) * MFR_MAX
-    # Isp RMSE：仅计算着火时段（真推力 > 0.01N），避免关机段除法崩溃
-    firing = (tt * THRUST_SCALE) > 0.01
+    # Isp RMSE：仅计算三方都有效的时刻（真值着火 + 预测不接近零）
+    firing = ((tt * THRUST_SCALE) > 0.05) & ((tm * MFR_MAX) > 5.0) & ((pm * MFR_MAX) > 5.0)
     if firing.sum() > 10:
         isp_pred = (pt[firing] * THRUST_SCALE) / (pm[firing] * MFR_MAX * 1e-6 * G0 + 1e-8)
         isp_true = (tt[firing] * THRUST_SCALE) / (tm[firing] * MFR_MAX * 1e-6 * G0 + 1e-8)
