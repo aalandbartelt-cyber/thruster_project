@@ -23,7 +23,7 @@ M 负责，dev-m 分支
   python model_finetune_v2.py --unfreeze_all          # 全网络微调对照
   python model_finetune_v2.py --scan_n 3,6,12,24      # 扫描微调数据量
 """
-import os, sys, argparse
+import os, sys, argparse, datetime
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -31,6 +31,8 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+from matplotlib.font_manager import FontProperties
 from scipy import stats as scipy_stats
 
 from data_pipeline_v2 import _build_features, THRUST_SCALE, MFR_MAX
@@ -117,6 +119,54 @@ def eval_many(model, metadata_rows, data_dir, seq_len=200, stride=200, device='c
 
 
 # ═══════════════════════════════════════════
+# 中文字体注册
+# ═══════════════════════════════════════════
+
+CN_FONT_CANDIDATES = [
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/opentype/noto/NotoSansCJK.ttc',
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+    '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+    '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+    '/usr/share/fonts/truetype/arphic/uming.ttc',
+    'C:/Windows/Fonts/msyh.ttc',
+    'C:/Windows/Fonts/simhei.ttf',
+]
+
+CN_FONT_PATH = None
+for _p in CN_FONT_CANDIDATES:
+    if os.path.exists(_p):
+        CN_FONT_PATH = _p
+        try:
+            fm.fontManager.addfont(_p)
+        except Exception:
+            pass
+        break
+
+def _cn_prop(size=12, weight='normal'):
+    if CN_FONT_PATH:
+        return FontProperties(fname=CN_FONT_PATH, size=size, weight=weight)
+    return FontProperties(size=size, weight=weight)
+
+
+# ═══════════════════════════════════════════
+# 日志双写 (stdout + 文件)
+# ═══════════════════════════════════════════
+
+class TeeLogger:
+    def __init__(self, filepath):
+        self.terminal = sys.stdout
+        self.log = open(filepath, 'w', encoding='utf-8', buffering=1)
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+
+# ═══════════════════════════════════════════
 # 主流程
 # ═══════════════════════════════════════════
 
@@ -139,6 +189,15 @@ def main():
     torch.manual_seed(42)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(42)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # ── 日志文件 ──
+    log_dir = "outputs/finetune_logs"
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir,
+        f"finetune_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    sys.stdout = TeeLogger(log_path)
+    print(f"日志文件: {log_path}")
+
     print(f"{'='*60}")
     print(f"  个体推进器微调 v2")
     print(f"  设备: {device}")
@@ -332,22 +391,43 @@ def main():
         print(f"  平均: thrust 改善 {mean_t:+.1f}% ± {std_t:.1f}% "
               f"(t={t_stat:.2f}, p={p_val:.4f}{'*' if p_val<0.05 else ''})")
 
-        # ── 汇总图（bug #10）──
+        # ── 汇总图 ──
         fig, ax = plt.subplots(figsize=(12, 5))
         sns = [r['sn'] for r in results]
         x = np.arange(len(sns)); w = 0.3
-        colors_t = ['#2ecc71' if r['t_imp'] > 3 else '#f39c12' if r['t_imp'] > 0 else '#e74c3c' for r in results]
-        colors_m = ['#2ecc71' if r['m_imp'] > 3 else '#f39c12' if r['m_imp'] > 0 else '#e74c3c' for r in results]
-        ax.bar(x - w/2, [r['t_imp'] for r in results], w, color=colors_t, edgecolor='white', label='Thrust')
-        ax.bar(x + w/2, [r['m_imp'] for r in results], w, color=colors_m, edgecolor='white', label='MFR')
+        t_vals = [r['t_imp'] for r in results]
+        m_vals = [r['m_imp'] for r in results]
+        colors_t = ['#2ecc71' if v > 3 else '#f39c12' if v > 0 else '#e74c3c' for v in t_vals]
+        colors_m = ['#2ecc71' if v > 3 else '#f39c12' if v > 0 else '#e74c3c' for v in m_vals]
+        bars_t = ax.bar(x - w/2, t_vals, w, color=colors_t, edgecolor='white', label='Thrust')
+        bars_m = ax.bar(x + w/2, m_vals, w, color=colors_m, edgecolor='white', label='MFR')
         ax.axhline(0, color='white', ls='-', lw=1.5)
+        # 数值标注
+        for bar, val in zip(bars_t, t_vals):
+            y_pos = bar.get_height()
+            offset = 0.3 if y_pos >= 0 else -0.3
+            ax.text(bar.get_x() + bar.get_width()/2, y_pos + offset,
+                    f'{val:+.1f}%', ha='center', va='bottom' if y_pos >= 0 else 'top',
+                    fontsize=7, fontweight='bold', color='white')
+        for bar, val in zip(bars_m, m_vals):
+            y_pos = bar.get_height()
+            offset = 0.3 if y_pos >= 0 else -0.3
+            ax.text(bar.get_x() + bar.get_width()/2, y_pos + offset,
+                    f'{val:+.1f}%', ha='center', va='bottom' if y_pos >= 0 else 'top',
+                    fontsize=7, fontweight='bold', color='white')
         ax.set_xticks(x); ax.set_xticklabels([f'SN{s}' for s in sns], fontsize=9)
-        ax.set_ylabel('RMSE 改善 (%)'); ax.set_title(f'个体微调效果 (n_finetune={n_ft})')
+        ax.set_ylabel('RMSE 改善 (%)', fontproperties=_cn_prop(12))
+        ax.set_title(f'个体微调效果 (n_finetune={n_ft})', fontproperties=_cn_prop(14, 'bold'))
         ax.legend(fontsize=10); ax.grid(axis='y', alpha=0.3)
+        # 设置 y 轴范围，为标注留空间
+        all_vals = t_vals + m_vals
+        y_margin = (max(all_vals) - min(all_vals)) * 0.15 + 0.5
+        ax.set_ylim(min(all_vals) - y_margin, max(all_vals) + y_margin)
         plt.tight_layout()
         fig_path = f"{model_save_dir.replace('models','figures')}/finetune_improvement_n{n_ft}.png"
         os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-        plt.savefig(fig_path, dpi=300); plt.close()
+        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        plt.close()
         print(f"  汇总图 → {fig_path}")
 
         # p < 0.1 打星提示
@@ -377,13 +457,23 @@ def main():
                     yerr=[r['std_m'] for r in scan_results],
                     marker='s', capsize=4, color='#3498db', label='MFR')
         ax.axhline(0, color='gray', ls='--')
-        ax.set_xlabel('微调用文件数 n'); ax.set_ylabel('平均 RMSE 改善 (%)')
-        ax.set_title('微调数据量 vs 改善幅度（边际收益曲线）')
+        ax.set_xlabel('微调用文件数 n', fontproperties=_cn_prop(12))
+        ax.set_ylabel('平均 RMSE 改善 (%)', fontproperties=_cn_prop(12))
+        ax.set_title('微调数据量 vs 改善幅度（边际收益曲线）', fontproperties=_cn_prop(14, 'bold'))
         ax.legend(); ax.grid(alpha=0.3)
         fig_path = f"{model_save_dir.replace('models','figures')}/finetune_scan_curve.png"
         os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-        plt.savefig(fig_path, dpi=300); plt.close()
+        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        plt.close()
         print(f"  边际收益曲线 → {fig_path}")
+
+    # ── 收尾 ──
+    print(f"\n{'='*60}")
+    print(f"  完成。日志已保存至: {log_path}")
+    print(f"{'='*60}")
+    if hasattr(sys.stdout, 'log'):
+        sys.stdout.log.close()
+    sys.stdout = sys.__stdout__
 
 if __name__ == "__main__":
     main()
