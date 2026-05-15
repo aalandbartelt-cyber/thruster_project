@@ -17,7 +17,14 @@ from data_pipeline_v2 import THRUST_SCALE, MFR_MAX
 from model_train_v2 import DualOutputLSTM, INPUT_DIM
 
 G0 = 9.80665
+EPS = 1e-8
+MG_PER_S_TO_KG_PER_S = 1e-6
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+def compute_isp(thrust, mfr):
+    """比冲 Isp = thrust / (mfr * G0)，mfr 单位为 mg/s，thrust 为 N"""
+    return thrust / (mfr * MG_PER_S_TO_KG_PER_S * G0 + EPS)
 
 
 # ═══════════════════════════════════════════
@@ -50,6 +57,73 @@ def load_dual_model(model_path="outputs/models/v2/dual_output_lstm_v2.pth",
     return model
 
 
+# ═══════════════════════════════════════════
+# Adapter 模型加载（零遗忘微调）
+# ═══════════════════════════════════════════
+
+# 最优 per-SN 策略（基于全量实验结果）
+OPTIMAL_FINETUNE_STRATEGY = {
+    13: 'adapter', 14: 'adapter', 15: 'adapter',
+    16: 'global',  17: 'adapter', 18: 'adapter',
+    19: 'adapter', 20: 'adapter', 21: 'adapter',
+    22: 'adapter', 23: 'adapter', 24: 'global',
+}
+
+# SN13-24 中哪些有 adapter 模型可用
+ADAPTER_AVAILABLE_SNS = [sn for sn, s in OPTIMAL_FINETUNE_STRATEGY.items() if s == 'adapter']
+
+
+def load_adapter_model(global_model, sn, device=None):
+    """
+    加载指定 SN 的 Adapter 微调模型。
+
+    参数
+    ----
+    global_model : nn.Module
+        已加载的全局 DualOutputLSTM 模型
+    sn : int
+        推进器序列号 (13-24)
+    device : torch.device, optional
+
+    返回
+    ----
+    model : AdapterDualOutputLSTM or None
+        若该 SN 有 adapter 模型则返回，否则返回 None（应使用 global model）
+    """
+    import os as _os
+    from model_finetune_v2 import AdapterDualOutputLSTM
+
+    if device is None:
+        device = DEVICE
+    if sn not in ADAPTER_AVAILABLE_SNS:
+        return None
+
+    adapter_path = f"outputs/models/v2/dual_output_lstm_v2_sn{sn}_adapter.pth"
+    if not _os.path.exists(adapter_path):
+        return None
+
+    model = AdapterDualOutputLSTM(global_model)
+    model.load_state_dict(torch.load(adapter_path, map_location=device,
+                                     weights_only=True))
+    model.to(device)
+    model.eval()
+    return model
+
+
+def load_model_for_sn(sn, device=None):
+    """
+    为指定 SN 加载最优模型（adapter 或 global）。
+
+    返回 (model, model_label)
+    """
+    global_model = load_dual_model(device=device)
+    strategy = OPTIMAL_FINETUNE_STRATEGY.get(sn, 'global')
+
+    if strategy == 'adapter':
+        adapter = load_adapter_model(global_model, sn, device=device)
+        if adapter is not None:
+            return adapter, f"SN{sn}-TUNED"
+    return global_model, "GLOBAL"
 # ═══════════════════════════════════════════
 # 单次推理
 # ═══════════════════════════════════════════
@@ -88,8 +162,7 @@ def predict(model, x_tensor, device=None):
 
     thrust = out[:, :, 0].cpu().numpy() * THRUST_SCALE
     mfr    = out[:, :, 1].cpu().numpy() * MFR_MAX
-    eps    = 1e-8
-    isp    = thrust / (mfr * G0 * 1e-6 + eps)
+    isp    = compute_isp(thrust, mfr)
 
     if single:
         thrust, mfr, isp = thrust[0], mfr[0], isp[0]
@@ -146,12 +219,11 @@ def predict_with_uncertainty(model, x_tensor, n_samples=30, device=None):
     mfr_mean    = mfr_arr.mean(axis=0)
     mfr_std     = mfr_arr.std(axis=0)
 
-    eps = 1e-8
-    isp_mean = thrust_mean / (mfr_mean * G0 * 1e-6 + eps)
+    isp_mean = compute_isp(thrust_mean, mfr_mean)
     isp_std  = isp_mean * np.sqrt(
-        (thrust_std / (thrust_mean + eps))**2 +
-        (mfr_std   / (mfr_mean + eps))**2
-    )  # 误差传播
+        (thrust_std / (thrust_mean + EPS))**2 +
+        (mfr_std   / (mfr_mean + EPS))**2
+    )
 
     if single:
         return (thrust_mean[0], mfr_mean[0], isp_mean[0],

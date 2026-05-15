@@ -10,7 +10,6 @@ app_v2.py — 航天单组元推进器数字孪生健康监测系统 (修订版)
 
 import os
 import io
-import json
 import tempfile
 import shutil
 import numpy as np
@@ -24,10 +23,18 @@ from matplotlib.font_manager import FontProperties
 
 from inference_utils import (
     load_dual_model,
+    load_adapter_model,
+    load_model_for_sn,
+    ADAPTER_AVAILABLE_SNS,
+    OPTIMAL_FINETUNE_STRATEGY,
     predict,
     predict_with_uncertainty,
     compute_residuals,
     generate_health_report,
+    compute_isp,
+    G0,
+    EPS,
+    MG_PER_S_TO_KG_PER_S,
 )
 from data_pipeline_v2 import load_sequence_window, THRUST_SCALE, MFR_MAX
 
@@ -55,7 +62,7 @@ for p in CN_FONT_CANDIDATES:
         CN_FONT_PATH = p
         try:
             fm.fontManager.addfont(p)
-        except Exception:
+        except (OSError, RuntimeError):
             pass
         break
 
@@ -97,6 +104,25 @@ STATUS_WARN    = "#FF8A4D"
 GRID_LINE      = "#3A4870"
 
 
+# ── 数值常量 ──
+THRUST_NOISE_STD        = 0.005
+MFR_NOISE_STD           = 0.5
+MC_DROPOUT_SAMPLES      = 20
+RANDOM_SEED              = 42
+MAX_IGNITION_SEARCH     = 500
+TRANSIENT_SKIP_STEPS    = 80
+SEQ_LEN                  = 200
+DEFAULT_THRESHOLD        = 0.25
+MC_CV_THRESHOLDS          = (0.03, 0.08, 0.15, 0.30)  # 变异系数分档
+MC_CONFIDENCE_VALUES      = (98, 85, 65, 40, 20)       # 对应置信度
+ANOMALY_RATIO_WARN        = 0.05
+ANOMALY_RATIO_CRIT        = 0.20
+ISP_THRESHOLD_SCALE       = 50
+CONF_THRESHOLD_GOOD       = 70
+CONF_THRESHOLD_WARN       = 40
+MODEL_RMSE_REF            = 0.0832  # v2.0 测试 RMSE
+
+
 def setup_matplotlib_theme():
     rcParams['figure.dpi']         = 130
     rcParams['savefig.dpi']        = 300
@@ -121,15 +147,20 @@ def setup_matplotlib_theme():
 
 setup_matplotlib_theme()
 
-# 图像资源（Base64 内嵌）
-_IMG_BANNER = ''
-for _p in ['assets/shu_banner.jpg', 'assets/shu_banner.png']:
-    if os.path.exists(_p):
-        import base64
-        _b = base64.b64encode(open(_p,'rb').read()).decode()
-        _ext = 'jpeg' if _p.endswith('.jpg') else 'png'
-        _IMG_BANNER = f'data:image/{_ext};base64,{_b}'
-        break
+@st.cache_resource
+def _load_banner():
+    import base64
+    for _p in ['assets/shu_banner.jpg', 'assets/shu_banner.png']:
+        try:
+            with open(_p, 'rb') as f:
+                _b = base64.b64encode(f.read()).decode()
+            _ext = 'jpeg' if _p.endswith('.jpg') else 'png'
+            return f'data:image/{_ext};base64,{_b}'
+        except FileNotFoundError:
+            continue
+    return ''
+
+_IMG_BANNER = _load_banner()
 
 # ════════════════════════════════════════════════════════════════════
 # 三、Streamlit + CSS
@@ -591,11 +622,20 @@ st.markdown(f"""
 
 
 # ════════════════════════════════════════════════════════════════════
-# 五、缓存
+# 五、模型加载与选择
 # ════════════════════════════════════════════════════════════════════
 
+# Session state
+if 'model_mode' not in st.session_state:
+    st.session_state.model_mode = 'GLOBAL'
+if 'active_sn' not in st.session_state:
+    st.session_state.active_sn = None
+if 'adapter_loaded_sn' not in st.session_state:
+    st.session_state.adapter_loaded_sn = None
+
+
 @st.cache_resource
-def load_model():
+def load_global_model_cached():
     return load_dual_model("outputs/models/v2/dual_output_lstm_v2.pth")
 
 
@@ -613,15 +653,37 @@ def load_shap_data():
           'cumulated_pulses','ssf','health_check','ramp1','ramp2','ramp3','ramp4',
           'onmod','offmod','random_short','random_long','random_mixed']
     try:
-        st = np.load(f"{_d}/shap_thrust.npy")
-        sm = np.load(f"{_d}/shap_mfr.npy")
-        si = np.load(f"{_d}/shap_isp.npy")
-        return {'thrust': np.abs(st), 'mfr': np.abs(sm), 'isp': np.abs(si), 'feats': _f}
-    except Exception:
+        s_t = np.load(f"{_d}/shap_thrust.npy")
+        s_m = np.load(f"{_d}/shap_mfr.npy")
+        s_i = np.load(f"{_d}/shap_isp.npy")
+        return {'thrust': np.abs(s_t), 'mfr': np.abs(s_m), 'isp': np.abs(s_i), 'feats': _f}
+    except (FileNotFoundError, OSError, ValueError):
         return None
 
 
-model = load_model()
+def get_active_model(sn=None):
+    """根据当前选择的模式返回模型和标签。文件 SN 优先于侧边栏选择。"""
+    # GLOBAL 模式：始终返回全局模型
+    if st.session_state.model_mode == 'GLOBAL':
+        return load_global_model_cached(), "GLOBAL"
+
+    # TUNED 模式：文件 SN 优先，侧边栏选择作 fallback
+    target_sn = sn or st.session_state.active_sn
+    if target_sn is None:
+        return load_global_model_cached(), "GLOBAL"
+
+    # 该 SN 是否有 adapter 可用
+    if OPTIMAL_FINETUNE_STRATEGY.get(target_sn) != 'adapter':
+        return load_global_model_cached(), f"GLOBAL (SN{target_sn} skip)"
+
+    global_model = load_global_model_cached()
+    adapter = load_adapter_model(global_model, target_sn)
+    if adapter is not None:
+        return adapter, f"SN{target_sn}-TUNED"
+    return global_model, "GLOBAL"
+
+
+global_model_cache = load_global_model_cached()
 metadata = load_metadata()
 shap_data = load_shap_data()
 
@@ -639,6 +701,40 @@ with st.sidebar:
     <div class="sidebar-header">
         <div class="sh-cn">任务控制台</div>
         <div class="sh-en">MISSION CONTROL</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="sidebar-section-title">模型选择</div>
+    <div class="sidebar-section-en">MODEL SELECTION</div>
+    """, unsafe_allow_html=True)
+
+    model_options = ['GLOBAL'] + [f'SN{sn}-TUNED' for sn in ADAPTER_AVAILABLE_SNS]
+    model_choice = st.selectbox(
+        'model_choice',
+        model_options,
+        index=0,
+        label_visibility='collapsed',
+        key='model_selector'
+    )
+
+    if model_choice == 'GLOBAL':
+        st.session_state.model_mode = 'GLOBAL'
+        st.session_state.active_sn = None
+    else:
+        st.session_state.model_mode = 'TUNED'
+        st.session_state.active_sn = int(model_choice.replace('SN', '').replace('-TUNED', ''))
+
+    is_tuned = st.session_state.model_mode == 'TUNED'
+    model_label = model_choice
+    strategy_label = OPTIMAL_FINETUNE_STRATEGY.get(st.session_state.active_sn, 'global') if st.session_state.active_sn else 'global'
+
+    st.markdown(f"""
+    <div style="font-size:13px;color:{TEXT_SECONDARY};margin-top:-8px;">
+        当前模型 &nbsp;━━&nbsp;
+        <span style="color:{DATA_GREEN if is_tuned else DATA_CYAN};font-weight:700;
+        font-family:'JetBrains Mono',monospace;font-size:15px;">{model_label}</span>
+        {f'<span style="color:{DATA_AMBER};font-size:11px;margin-left:8px;">[微调优化]</span>' if is_tuned else f'<span style="color:{TEXT_DIM};font-size:11px;margin-left:8px;">[全局基座]</span>'}
     </div>
     """, unsafe_allow_html=True)
 
@@ -691,14 +787,30 @@ with st.sidebar:
 
 
 # ════════════════════════════════════════════════════════════════════
-# 七、辅助函数
+# 八、辅助函数
 # ════════════════════════════════════════════════════════════════════
+
+def _compute_actuals(thrust_true, mfr_true, seq_len, seed=RANDOM_SEED):
+    """添加高斯噪声生成传感器仿真值，返回 (actual_thrust, actual_mfr, actual_isp)。"""
+    rng = np.random.RandomState(seed)
+    actual_thrust = thrust_true + rng.normal(0, THRUST_NOISE_STD, seq_len)
+    actual_mfr    = mfr_true    + rng.normal(0, MFR_NOISE_STD,    seq_len)
+    actual_isp    = compute_isp(actual_thrust, actual_mfr)
+    return actual_thrust, actual_mfr, actual_isp
+
+
+def _cv_to_confidence(cv):
+    """变异系数映射到置信度评分。"""
+    for threshold, conf in zip(MC_CV_THRESHOLDS, MC_CONFIDENCE_VALUES[:-1]):
+        if cv < threshold:
+            return conf
+    return MC_CONFIDENCE_VALUES[-1]
+
 
 def telemetry_card(label_cn, label_en, value, unit="", status="nominal", delta_text=None):
     delta_html = ""
     if delta_text is not None:
-        cls = "delta-good" if status == "nominal" else (
-              "delta-bad"  if status == "critical" else "delta-good")
+        cls = "delta-good" if status == "nominal" else "delta-bad"
         delta_html = f'<div class="telemetry-delta {cls}">{delta_text}</div>'
     st.markdown(f"""
     <div class="telemetry-card card-{status}">
@@ -720,7 +832,6 @@ def section_header(cn, en):
 
 
 def render_fig(fig):
-    """高 DPI PNG buffer 输出"""
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=180, bbox_inches='tight',
                 facecolor=BG_PANEL, edgecolor='none')
@@ -730,7 +841,6 @@ def render_fig(fig):
 
 
 def apply_cn_to_axis(ax, title=None, xlabel=None, ylabel=None):
-    """强制把中文 FontProperties 应用到坐标轴所有文字"""
     if title is not None:
         ax.set_title(title, fontproperties=CN_TITLE, loc='left', pad=12,
                      color=TEXT_PRIMARY)
@@ -751,86 +861,82 @@ def apply_cn_to_axis(ax, title=None, xlabel=None, ylabel=None):
 # ════════════════════════════════════════════════════════════════════
 
 if uploaded_file is not None:
-    seq_len = 200
     fname = uploaded_file.name
-
-    # 写入临时文件
     tmpdir = tempfile.mkdtemp()
-    tmp_path = os.path.join(tmpdir, fname)
-    with open(tmp_path, 'wb') as f:
-        f.write(uploaded_file.getbuffer())
+    try:
+        tmp_path = os.path.join(tmpdir, fname)
+        with open(tmp_path, 'wb') as f:
+            f.write(uploaded_file.getbuffer())
 
-    # 自动定位到稳定燃烧段（跳过瞬态）
-    _raw = pd.read_csv(tmp_path)
-    _fire = 0
-    for i in range(min(500, len(_raw))):
-        if _raw['ton'].iloc[i] > 0:
-            _fire = i
-            break
-    # 点火后跳过 80 步（800ms，避开启动瞬态），最多偏移到文件前 2/3 处
-    _max_off = max(0, len(_raw) - seq_len - 10)
-    offset = min(_fire + 80, _max_off)
+        # 自动定位到稳定燃烧段
+        _raw = pd.read_csv(tmp_path)
+        _fire = 0
+        for i in range(min(MAX_IGNITION_SEARCH, len(_raw))):
+            if _raw['ton'].iloc[i] > 0:
+                _fire = i
+                break
+        _max_off = max(0, len(_raw) - SEQ_LEN - 10)
+        offset = min(_fire + TRANSIENT_SKIP_STEPS, _max_off)
 
-    matched = metadata[metadata['filename'] == fname]
-    if len(matched) > 0:
-        meta_row = matched.iloc[0]
-        x, y_norm, _ = load_sequence_window(tmp_path, meta_row,
-                                            start=offset, seq_len=seq_len)
-        x_tensor = torch.from_numpy(x).float().unsqueeze(0)
+        matched = metadata[metadata['filename'] == fname]
+        if len(matched) > 0:
+            meta_row = matched.iloc[0]
+            file_sn = int(meta_row['sn'])
 
-        (thrust_pred, mfr_pred, isp,
-         thrust_std, mfr_std, isp_std) = predict_with_uncertainty(model, x_tensor, n_samples=20)
-        thrust_pred = thrust_pred.squeeze()
-        mfr_pred    = mfr_pred.squeeze()
-        isp         = isp.squeeze()
-        thrust_std  = thrust_std.squeeze()
-        mfr_std     = mfr_std.squeeze()
-        isp_std     = isp_std.squeeze()
+            # 根据上传文件自动匹配对应 SN 的微调模型
+            active_model, model_label = get_active_model(file_sn)
 
-        thrust_true = y_norm[:, 0] * THRUST_SCALE
-        mfr_true    = y_norm[:, 1] * MFR_MAX
-        np.random.seed(42)
-        actual_thrust = thrust_true + np.random.normal(0, 0.005, seq_len)
-        actual_mfr    = mfr_true    + np.random.normal(0, 0.5,   seq_len)
-        actual_isp    = actual_thrust / (actual_mfr * 1e-6 * 9.80665 + 1e-8)
+            x, y_norm, _ = load_sequence_window(tmp_path, meta_row,
+                                                start=offset, seq_len=SEQ_LEN)
+            x_tensor = torch.from_numpy(x).float().unsqueeze(0)
 
-        # MC Dropout 置信度：基于推力预测的变异系数
-        _cv = np.mean(thrust_std) / (np.mean(thrust_pred) + 1e-8)
-        if _cv < 0.03:       model_conf = 98
-        elif _cv < 0.08:     model_conf = 85
-        elif _cv < 0.15:     model_conf = 65
-        elif _cv < 0.30:     model_conf = 40
-        else:                model_conf = 20
+            (thrust_pred, mfr_pred, isp,
+             thrust_std, mfr_std, isp_std) = predict_with_uncertainty(
+                 active_model, x_tensor, n_samples=MC_DROPOUT_SAMPLES)
+            thrust_pred = thrust_pred.squeeze()
+            mfr_pred    = mfr_pred.squeeze()
+            isp         = isp.squeeze()
+            thrust_std  = thrust_std.squeeze()
+            mfr_std     = mfr_std.squeeze()
+            isp_std     = isp_std.squeeze()
 
+            thrust_true = y_norm[:, 0] * THRUST_SCALE
+            mfr_true    = y_norm[:, 1] * MFR_MAX
+
+            model_conf = _cv_to_confidence(
+                np.mean(thrust_std) / (np.mean(thrust_pred) + EPS))
+            source_label = "模型直接推理"
+        else:
+            model_conf = 90
+            preds_npy   = np.load("outputs/predictions/v2/predictions_dual.npy")
+            targets_npy = np.load("outputs/predictions/v2/targets_dual.npy")
+            sample_idx = hash(fname) % len(preds_npy)
+            _o = min(offset, preds_npy.shape[1] - SEQ_LEN)
+            thrust_pred = preds_npy[sample_idx, _o:_o+SEQ_LEN, 0] * THRUST_SCALE
+            mfr_pred    = preds_npy[sample_idx, _o:_o+SEQ_LEN, 1] * MFR_MAX
+            thrust_true = targets_npy[sample_idx, _o:_o+SEQ_LEN, 0] * THRUST_SCALE
+            mfr_true    = targets_npy[sample_idx, _o:_o+SEQ_LEN, 1] * MFR_MAX
+            isp = compute_isp(thrust_pred, mfr_pred)
+            source_label = "缓存预测回放"
+
+        actual_thrust, actual_mfr, actual_isp = _compute_actuals(
+            thrust_true, mfr_true, SEQ_LEN)
+    finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-        source_label = "模型直接推理"
-    else:
-        model_conf = 90  # 缓存预测默认为高置信度
-        preds_npy   = np.load("outputs/predictions/v2/predictions_dual.npy")
-        targets_npy = np.load("outputs/predictions/v2/targets_dual.npy")
-        with open("outputs/predictions/v2/meta_info.json") as f:
-            meta = json.load(f)
-        ts = meta['thrust_scale']; ms = meta['mfr_max']
-        sample_idx = hash(fname) % len(preds_npy)
-        _o = min(offset, preds_npy.shape[1] - seq_len)  # 越界保护
-        thrust_pred = preds_npy[sample_idx, _o:_o+seq_len, 0] * ts
-        mfr_pred    = preds_npy[sample_idx, _o:_o+seq_len, 1] * ms
-        thrust_true = targets_npy[sample_idx, _o:_o+seq_len, 0] * ts
-        mfr_true    = targets_npy[sample_idx, _o:_o+seq_len, 1] * ms
-        np.random.seed(42)
-        actual_thrust = thrust_true + np.random.normal(0, 0.005, seq_len)
-        actual_mfr    = mfr_true    + np.random.normal(0, 0.5,   seq_len)
-        actual_isp    = actual_thrust / (actual_mfr * 1e-6 * 9.80665 + 1e-8)
-        isp = thrust_pred / (mfr_pred * 1e-6 * 9.80665 + 1e-8)
-        source_label = "缓存预测回放"
 
     residuals, is_anomaly, anomaly_ratio = compute_residuals(
         thrust_pred, actual_thrust, threshold)
+
+    is_tuned_model = (model_label != 'GLOBAL')
+    tuned_badge = f'<span style="background:{DATA_GREEN};color:#000;font-size:10px;font-weight:700;padding:1px 8px;border-radius:3px;margin-left:10px;">TUNED</span>' if is_tuned_model else ''
 
     st.markdown(f"""
     <div class="source-bar">
         <span class="label">DATA SOURCE</span>
         &nbsp;&nbsp;<span class="value">{fname}</span>
+        &nbsp;&nbsp;<span style="color:{NASA_RED};font-weight:700;">/</span>&nbsp;&nbsp;
+        <span class="label">MODEL</span>
+        &nbsp;&nbsp;<span class="accent">{model_label}</span>{tuned_badge}
         &nbsp;&nbsp;<span style="color:{NASA_RED};font-weight:700;">/</span>&nbsp;&nbsp;
         <span class="label">MODE</span>
         &nbsp;&nbsp;<span class="accent">{source_label}</span>
@@ -845,9 +951,12 @@ if uploaded_file is not None:
     mean_isp    = np.mean(isp)
 
     residual_rms = float(np.sqrt(np.mean(residuals**2)))
-    anom_status   = "nominal" if anomaly_ratio < 0.05 else ("warning" if anomaly_ratio < 0.20 else "critical")
-    anom_delta    = "状态正常" if anomaly_ratio < 0.05 else (
-                    "异常升高" if anomaly_ratio < 0.20 else "严重异常")
+    if anomaly_ratio < ANOMALY_RATIO_WARN:
+        anom_status, anom_delta = "nominal", "状态正常"
+    elif anomaly_ratio < ANOMALY_RATIO_CRIT:
+        anom_status, anom_delta = "warning", "异常升高"
+    else:
+        anom_status, anom_delta = "critical", "严重异常"
 
     c1, c2, c3, c4 = st.columns(4)
     with c1: telemetry_card("峰值推力",   "PEAK THRUST",      f"{peak_thrust:.2f}",      " N",    "nominal")
@@ -855,41 +964,44 @@ if uploaded_file is not None:
     with c3: telemetry_card("平均比冲",   "SPECIFIC IMPULSE", f"{mean_isp:.1f}",          " s",    "nominal")
     with c4: telemetry_card("异常占比",   "ANOMALY RATIO",    f"{anomaly_ratio*100:.2f}", " %",    anom_status, anom_delta)
 
+    if is_tuned_model:
+        st.markdown(f"""
+        <div style="text-align:center;margin:-8px 0 16px 0;">
+            <span style="background:{BG_PANEL_HI};color:{DATA_GREEN};font-size:11px;font-weight:600;
+                         padding:4px 14px;border-radius:4px;border:1px solid {BORDER};">
+                ✓ 个体微调模型 &nbsp;━&nbsp; 针对 SN{st.session_state.active_sn} 优化（零遗忘，base冻结）
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
     # ── 实时遥测曲线 ──
     section_header("实时遥测曲线", "REAL-TIME TELEMETRY")
 
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5.4))
-    t_axis = np.arange(seq_len)
-
-    if is_anomaly.any():
-        ax1.fill_between(t_axis, 0, max(actual_thrust)*1.18,
-                         where=is_anomaly, color=NASA_RED, alpha=0.2,
-                         label='异常区间')
-    ax1.plot(t_axis, actual_thrust, color=DATA_CYAN,  lw=2.0, label='传感器实测')
-    ax1.plot(t_axis, thrust_pred,   color=DATA_AMBER, lw=1.4, ls='--', label='AI 预测基准')
-    ax1.legend(loc='upper right')
-    ax1.grid(True, axis='y')
-    apply_cn_to_axis(ax1, title='推力 · THRUST',
-                     xlabel='时间步 (0.01s)', ylabel='推力 (N)')
-
-    ax2.plot(t_axis, actual_mfr, color=DATA_CYAN,  lw=2.0, label='传感器实测')
-    ax2.plot(t_axis, mfr_pred,   color=DATA_AMBER, lw=1.4, ls='--', label='AI 预测基准')
-    ax2.legend(loc='upper right')
-    ax2.grid(True, axis='y')
-    apply_cn_to_axis(ax2, title='质量流量 · MASS FLOW RATE',
-                     xlabel='时间步 (0.01s)', ylabel='流量 (mg/s)')
-
-    ax3.plot(t_axis, actual_isp, color=DATA_CYAN, lw=1.8, label='传感器实测')
-    ax3.plot(t_axis, isp, color=DATA_AMBER, lw=2.0, ls='--', label='AI预测')
-    ax3.axhline(np.mean(isp), color=DATA_AMBER, ls=':', lw=1.2, alpha=0.5,
-                label=f'预测均值 {np.mean(isp):.0f} s')
-    ax3.legend(loc='upper right')
-    ax3.grid(True, axis='y')
-    apply_cn_to_axis(ax3, title='比冲 · SPECIFIC IMPULSE',
-                     xlabel='时间步 (0.01s)', ylabel='比冲 (s)')
-
+    t_axis = np.arange(SEQ_LEN)
+    fig_tel, axes_tel = plt.subplots(1, 3, figsize=(18, 5.4))
+    for ax, actual, pred, title, ylabel in [
+        (axes_tel[0], actual_thrust, thrust_pred,
+         '推力 · THRUST', '推力 (N)'),
+        (axes_tel[1], actual_mfr, mfr_pred,
+         '质量流量 · MASS FLOW RATE', '流量 (mg/s)'),
+        (axes_tel[2], actual_isp, isp,
+         '比冲 · SPECIFIC IMPULSE', '比冲 (s)'),
+    ]:
+        max_val = max(np.max(actual), np.max(pred))
+        if is_anomaly is not None and is_anomaly.any():
+            ax.fill_between(t_axis, 0, max_val * 1.18,
+                            where=is_anomaly, color=NASA_RED, alpha=0.2,
+                            label='异常区间')
+        ax.plot(t_axis, actual, color=DATA_CYAN,  lw=2.0, label='传感器实测')
+        ax.plot(t_axis, pred,   color=DATA_AMBER, lw=1.4, ls='--', label='AI 预测基准')
+        if ax is axes_tel[2]:
+            ax.axhline(np.mean(pred), color=DATA_AMBER, ls=':', lw=1.2, alpha=0.5,
+                       label=f'预测均值 {np.mean(pred):.0f} s')
+        ax.legend(loc='upper right')
+        ax.grid(True, axis='y')
+        apply_cn_to_axis(ax, title=title, xlabel='时间步 (0.01s)', ylabel=ylabel)
     plt.tight_layout(pad=2.0)
-    render_fig(fig)
+    render_fig(fig_tel)
 
     # ── 异常检测 ──
     section_header("异常检测与残差监控", "ANOMALY DETECTION")
@@ -897,24 +1009,25 @@ if uploaded_file is not None:
     mfr_residuals = np.abs(mfr_pred - actual_mfr)
     isp_residuals = np.abs(isp - actual_isp)
     mfr_threshold = threshold * (MFR_MAX / THRUST_SCALE)  # 按量纲缩放阈值
-    isp_threshold = threshold * 50                        # Isp 经验阈值
+    isp_threshold = threshold * ISP_THRESHOLD_SCALE
 
-    fig2, (axr1, axr2, axr3) = plt.subplots(3, 1, figsize=(18, 7.5))
-    for _ax, _res, _thr, _title, _yl, _clr in [
-        (axr1, residuals,     threshold,     '推力残差 · THRUST',    'N',     STATUS_WARN),
-        (axr2, mfr_residuals, mfr_threshold, '质量流量残差 · MASS FLOW RATE', 'mg/s',  DATA_CYAN),
-        (axr3, isp_residuals, isp_threshold, '比冲残差 · SPECIFIC IMPULSE', 's', DATA_VIOLET),
-    ]:
-        _ax.plot(t_axis, _res, color=_clr, lw=1.5)
-        _ax.axhline(_thr, color=NASA_RED, ls='--', lw=1.2, label=f'阈值 {_thr:.2f} {_yl}')
+    data_rows = [
+        (residuals,     threshold,     '推力残差 · THRUST',    'N',     STATUS_WARN),
+        (mfr_residuals, mfr_threshold, '质量流量残差 · MASS FLOW RATE', 'mg/s',  DATA_CYAN),
+        (isp_residuals, isp_threshold, '比冲残差 · SPECIFIC IMPULSE', 's', DATA_VIOLET),
+    ]
+    fig2, axes_res = plt.subplots(3, 1, figsize=(18, 7.5))
+    for idx, (_res, _thr, _title, _yl, _clr) in enumerate(data_rows):
+        ax = axes_res[idx]
+        ax.plot(t_axis, _res, color=_clr, lw=1.5)
+        ax.axhline(_thr, color=NASA_RED, ls='--', lw=1.2, label=f'阈值 {_thr:.2f} {_yl}')
         _anom = _res > _thr
         if _anom.any():
-            _ax.fill_between(t_axis, 0, _res, where=_anom, color=NASA_RED, alpha=0.3)
-        _ax.legend(loc='upper right', fontsize=8)
-        _ax.grid(True, axis='y', alpha=0.3)
-        apply_cn_to_axis(_ax, title=_title, ylabel=f'残差 ({_yl})',
-                         xlabel='时间步 (0.01s)' if _ax is axr3 else '')
-
+            ax.fill_between(t_axis, 0, _res, where=_anom, color=NASA_RED, alpha=0.3)
+        ax.legend(loc='upper right', fontsize=8)
+        ax.grid(True, axis='y', alpha=0.3)
+        xlabel = '时间步 (0.01s)' if idx == 2 else ''
+        apply_cn_to_axis(ax, title=_title, ylabel=f'残差 ({_yl})', xlabel=xlabel)
     plt.tight_layout(pad=2.0)
     render_fig(fig2)
 
@@ -953,7 +1066,12 @@ if uploaded_file is not None:
         pa      = report.get('prediction_accuracy', {})
         anom    = report.get('anomaly_status', {})
         overall = report['overall_health']
-        conf_level = 'good' if model_conf >= 70 else ('warning' if model_conf >= 40 else 'critical')
+        if model_conf >= CONF_THRESHOLD_GOOD:
+            conf_level = 'good'
+        elif model_conf >= CONF_THRESHOLD_WARN:
+            conf_level = 'warning'
+        else:
+            conf_level = 'critical'
 
         def _bar(s):
             return f'<span class="score-bar"><span class="score-fill" style="width:{s}%"></span></span>'

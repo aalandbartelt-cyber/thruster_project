@@ -42,6 +42,57 @@ G0 = 9.80665
 MODEL_RMSE = 0.0832
 
 # ═══════════════════════════════════════════
+# Adapter 微调模型（零遗忘方案）
+# ═══════════════════════════════════════════
+
+class AdapterDualOutputLSTM(nn.Module):
+    """冻结全部原始参数，仅训练小型瓶颈适配器（~41K params, 3.6%）"""
+    def __init__(self, base_model, attn_adapter_dim=64, fc_adapter_dim=32):
+        super().__init__()
+        self.base = base_model
+        for p in self.base.parameters():
+            p.requires_grad = False
+        hidden = 256
+        fc_hidden = 128
+        self.attn_adapter = nn.Sequential(
+            nn.Linear(hidden, attn_adapter_dim), nn.ReLU(),
+            nn.Linear(attn_adapter_dim, hidden))
+        nn.init.zeros_(self.attn_adapter[-1].weight)
+        nn.init.zeros_(self.attn_adapter[-1].bias)
+        self.fc_adapter = nn.Sequential(
+            nn.Linear(fc_hidden, fc_adapter_dim), nn.ReLU(),
+            nn.Linear(fc_adapter_dim, fc_hidden))
+        nn.init.zeros_(self.fc_adapter[-1].weight)
+        nn.init.zeros_(self.fc_adapter[-1].bias)
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.base.eval()  # base 始终 eval，防止 LSTM dropout 干扰 adapter 训练
+        return self
+
+    def forward(self, x):
+        self.base.lstm.flatten_parameters()
+        out, _ = self.base.lstm(x)
+        attn_out, _ = self.base.attention(out, out, out)
+        out = self.base.ln(out + attn_out)
+        out = out + self.attn_adapter(out)
+        h = self.base.fc[0](out)
+        h = self.base.fc[1](h)
+        h = self.base.fc[2](h)
+        h = h + self.fc_adapter(h)
+        return self.base.fc[3](h)
+
+
+def build_adapter_model(global_model, device, attn_dim=64, fc_dim=32):
+    model = AdapterDualOutputLSTM(global_model, attn_adapter_dim=attn_dim, fc_adapter_dim=fc_dim)
+    model.to(device)
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"  Adapter 模型: {trainable:,}/{total:,} 参数可训练 ({100*trainable/total:.1f}%)")
+    return model
+
+
+# ═══════════════════════════════════════════
 # 微调数据集
 # ═══════════════════════════════════════════
 
@@ -72,6 +123,23 @@ def freeze_params(module, freeze=True):
 def dual_loss(pred, target, w_thrust=0.7, w_mfr=0.3):
     mse = nn.MSELoss()
     return w_thrust * mse(pred[:,:,0], target[:,:,0]) + w_mfr * mse(pred[:,:,1], target[:,:,1])
+
+
+def triple_loss(pred, target, w_thrust=0.6, w_mfr=0.25, w_isp=0.05):
+    """三目标损失：thrust + mfr + 归一化 Isp（w_isp 应小，避免 Isp 量纲主导）"""
+    mse = nn.MSELoss()
+    loss_t = mse(pred[:,:,0], target[:,:,0])
+    loss_m = mse(pred[:,:,1], target[:,:,1])
+    firing = ((target[:,:,0] * THRUST_SCALE) > 0.05) & \
+             ((target[:,:,1] * MFR_MAX) > 5.0) & \
+             ((pred[:,:,1] * MFR_MAX) > 5.0)
+    if firing.sum() > 10:
+        isp_pred = (pred[:,:,0][firing] * THRUST_SCALE) / (pred[:,:,1][firing] * MFR_MAX * 1e-6 * G0 + 1e-8)
+        isp_true = (target[:,:,0][firing] * THRUST_SCALE) / (target[:,:,1][firing] * MFR_MAX * 1e-6 * G0 + 1e-8)
+        loss_i = mse(isp_pred / 100.0, isp_true / 100.0)  # 除以 100 使量级与归一化 thrust/mfr 对齐
+    else:
+        loss_i = torch.tensor(0.0, device=pred.device)
+    return w_thrust * loss_t + w_mfr * loss_m + w_isp * loss_i, loss_t.item(), loss_m.item(), loss_i.item()
 
 
 # ═══════════════════════════════════════════
@@ -183,6 +251,18 @@ def main():
     parser.add_argument('--seq_len', type=int, default=200)
     parser.add_argument('--stride', type=int, default=200, help='评估滑动步长')
     parser.add_argument('--no_freeze_lstm', action='store_true', help='不冻结 LSTM（默认冻结 LSTM+Attention）')
+    parser.add_argument('--use_adapters', action='store_true',
+                        help='使用 Adapter 微调：冻结全部原始参数，仅训练小型适配器（~41K params），零遗忘')
+    parser.add_argument('--use_isp_loss', action='store_true',
+                        help='使用三目标损失（thrust+MFR+Isp），防止 adapter 优化时比冲退化')
+    parser.add_argument('--isp_loss_weight', type=float, default=0.05,
+                        help='Isp 损失权重（默认 0.05，thrust=0.6, mfr=0.25）')
+    parser.add_argument('--attn_adapter_dim', type=int, default=64,
+                        help='Attention adapter 瓶颈维度（默认 64）')
+    parser.add_argument('--fc_adapter_dim', type=int, default=32,
+                        help='FC adapter 瓶颈维度（默认 32）')
+    parser.add_argument('--per_sn_optimize', action='store_true',
+                        help='Per-SN 超参优化：对困难 SN 自动扫描 lr/adapter_dim/isp_weight')
     parser.add_argument('--unfreeze_all', action='store_true', help='全网络微调对照')
     parser.add_argument('--scan_n', type=str, default=None,
                         help='扫描微调数据量，逗号分隔，如 3,6,12,24')
@@ -206,8 +286,15 @@ def main():
     print(f"  个体推进器微调 v2")
     print(f"  设备: {device}")
     print(f"  微调用文件: {args.n_finetune}/SN  |  Epochs: {args.epochs}  lr: {args.lr}")
-    if not args.no_freeze_lstm: print(f"  模式: 冻结 LSTM+Attention")
-    if args.unfreeze_all: print(f"  模式: 全网络微调（v1 风格对照）")
+    if args.use_adapters:
+        mode_str = f"Adapter 微调（冻结全部原始参数，仅训练~41K adapter params，零遗忘）"
+        if args.use_isp_loss:
+            mode_str += f"\n  损失: triple_loss (thrust+MFR+Isp, w_isp={args.isp_loss_weight})"
+        print(f"  模式: {mode_str}")
+    elif args.unfreeze_all:
+        print(f"  模式: 全网络微调（v1 风格对照）")
+    elif not args.no_freeze_lstm:
+        print(f"  模式: 冻结 LSTM+Attention")
     print(f"{'='*60}")
 
     # ── 数据 ──
@@ -268,19 +355,29 @@ def main():
             print(f"    全局: thr={t_base:.4f} N  mfr={m_base:.2f} mg/s  isp={i_base:.2f} s")
 
             # ── 微调 ──
-            model = DualOutputLSTM(input_dim=INPUT_DIM).to(device)
-            model.load_state_dict(torch.load(
-                "outputs/models/v2/dual_output_lstm_v2.pth",
-                map_location=device, weights_only=True))
-
-            # 微调策略（bug #7/#12）
-            strategy = 'unfreeze' if args.unfreeze_all else 'freeze_lstm'
-            if args.unfreeze_all:
-                pass
-            elif not args.no_freeze_lstm:
-                freeze_params(model.lstm)
-                freeze_params(model.attention)
-            # FC + LN 默认 requires_grad=True
+            if args.use_adapters:
+                base_model = DualOutputLSTM(input_dim=INPUT_DIM).to(device)
+                base_model.load_state_dict(torch.load(
+                    "outputs/models/v2/dual_output_lstm_v2.pth",
+                    map_location=device, weights_only=True))
+                base_model.eval()
+                model = build_adapter_model(base_model, device,
+                                          attn_dim=args.attn_adapter_dim,
+                                          fc_dim=args.fc_adapter_dim)
+                strategy = 'adapter'
+            else:
+                model = DualOutputLSTM(input_dim=INPUT_DIM).to(device)
+                model.load_state_dict(torch.load(
+                    "outputs/models/v2/dual_output_lstm_v2.pth",
+                    map_location=device, weights_only=True))
+                # 微调策略（bug #7/#12）
+                strategy = 'unfreeze' if args.unfreeze_all else 'freeze_lstm'
+                if args.unfreeze_all:
+                    pass
+                elif not args.no_freeze_lstm:
+                    freeze_params(model.lstm)
+                    freeze_params(model.attention)
+                # FC + LN 默认 requires_grad=True
 
             dataset = FinetuneDataset(df_train, test_dir, args.seq_len, 100)
             loader = DataLoader(dataset, batch_size=32, shuffle=True)
@@ -304,13 +401,15 @@ def main():
                         vy_t_list.append(torch.from_numpy(vy).float().unsqueeze(0).to(device))
 
             model.train()
+            loss_fn = lambda pred, targ: triple_loss(pred, targ, w_isp=args.isp_loss_weight)[0] \
+                      if args.use_isp_loss else dual_loss(pred, targ)
             best_val = float('inf'); best_ep = 0; no_imp = 0
             for ep in range(args.epochs):
                 total_loss = 0
                 for x, y in loader:
                     x, y = x.to(device), y.to(device)
                     optimizer.zero_grad()
-                    loss = dual_loss(model(x), y)
+                    loss = loss_fn(model(x), y)
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     optimizer.step()
@@ -318,7 +417,7 @@ def main():
 
                 model.eval()
                 with torch.no_grad():
-                    vloss = np.mean([dual_loss(model(vxt), vyt).item() for vxt, vyt in zip(vx_t_list, vy_t_list)])
+                    vloss = np.mean([loss_fn(model(vxt), vyt).item() for vxt, vyt in zip(vx_t_list, vy_t_list)])
                 scheduler.step(vloss)
 
                 if vloss < best_val:
@@ -370,9 +469,14 @@ def main():
                 forget_mean = np.mean(forget_t)
                 fb_mean = np.mean([global_perf_by_sn[osn] for osn in target_sns if osn != sn])
                 ratio = forget_mean / max(fb_mean, 1e-8)
-                if ratio < 1.02:   fstatus = '无遗忘'
-                elif ratio < 1.10: fstatus = '轻微退化'
-                else:              fstatus = '严重遗忘'
+                if args.use_adapters:
+                    fstatus = '预期内（每SN独立adapter，base model 未变）'
+                elif ratio < 1.02:
+                    fstatus = '无遗忘'
+                elif ratio < 1.10:
+                    fstatus = '轻微退化'
+                else:
+                    fstatus = '严重遗忘'
                 print(f"    遗忘检查: 全局均值={fb_mean:.4f} → 微调后均值={forget_mean:.4f}  (ratio={ratio:.3f}, {fstatus})")
 
         # ═══════════════════════════════════════════
