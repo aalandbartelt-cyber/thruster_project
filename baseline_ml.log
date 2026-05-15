@@ -1,0 +1,157 @@
+======================================================================
+  Thruster Digital Twin — XGBoost & LightGBM Baseline
+  Device: cuda
+======================================================================
+
+Train files: 908, Val files: 228
+
+======================================================================
+  STEP 1: Building unified test set (same windows for all methods)
+======================================================================
+  Unified test: 150330 windows from 472 files
+    Flat shape: (150330, 3400), Eng shape: (150330, 47)
+
+======================================================================
+  STEP 2: Engineered features training (~47 dims)
+======================================================================
+
+  Loading train data...
+  Loaded 316 files -> 100000 windows (47 feats)
+  Loaded 103 files -> 30000 windows (47 feats)
+  Train: (100000, 47), Val: (30000, 47), Test: (150330, 47)
+
+  [Eng] Thrust...
+    XGBoost  thrust RMSE: 0.1151 N  (1s)
+/home/mary/miniconda3/envs/thruster_ai/lib/python3.10/site-packages/sklearn/utils/validation.py:2749: UserWarning: X does not have valid feature names, but LGBMRegressor was fitted with feature names
+  warnings.warn(
+    LightGBM thrust RMSE: 0.1207 N  (2s)
+
+  [Eng] MFR...
+    XGBoost  mfr    RMSE: 138.8 mg/s  (1s)
+/home/mary/miniconda3/envs/thruster_ai/lib/python3.10/site-packages/sklearn/utils/validation.py:2749: UserWarning: X does not have valid feature names, but LGBMRegressor was fitted with feature names
+  warnings.warn(
+    LightGBM mfr    RMSE: 142.0 mg/s  (2s)
+
+======================================================================
+  STEP 3: LSTM window-mean on SAME test windows
+======================================================================
+  LSTM thrust (window-mean): 0.0769 N
+  LSTM mfr    (window-mean): 86.9 mg/s
+
+======================================================================
+  STEP 4: Pointwise (17-dim, directly comparable to LSTM pointwise)
+======================================================================
+
+  Loading pointwise data...
+  Loaded 908 files -> 45400 pointwise samples
+  Loaded 228 files -> 11400 pointwise samples
+  Loaded 1206 files -> 60300 pointwise samples
+  Train: (45400, 17), Val: (11400, 17), Test: (60300, 17)
+
+  [Pointwise] Thrust...
+    XGBoost  thrust RMSE: 0.1524 N  (0s)
+/home/mary/miniconda3/envs/thruster_ai/lib/python3.10/site-packages/sklearn/utils/validation.py:2749: UserWarning: X does not have valid feature names, but LGBMRegressor was fitted with feature names
+  warnings.warn(
+    LightGBM thrust RMSE: 0.1540 N  (0s)
+
+  [Pointwise] MFR...
+    XGBoost  mfr    RMSE: 154.5 mg/s  (0s)
+/home/mary/miniconda3/envs/thruster_ai/lib/python3.10/site-packages/sklearn/utils/validation.py:2749: UserWarning: X does not have valid feature names, but LGBMRegressor was fitted with feature names
+  warnings.warn(
+    LightGBM mfr    RMSE: 155.6 mg/s  (0s)
+
+==========================================================================================
+  GLOBAL COMPARISON: XGBoost vs LightGBM vs v2.0 Attention-LSTM
+==========================================================================================
+  Method                                 Thrust RMSE       MFR RMSE               Metric
+  ----------------------------------- -------------- -------------- --------------------
+  XGBoost (engineered ~47d)                  0.1151 N         138.8 mg/s          window-mean
+  LightGBM (engineered ~47d)                 0.1207 N         142.0 mg/s          window-mean
+  LSTM (window-mean, same windows)           0.0769 N          86.9 mg/s          window-mean
+  ---                                            ---            ---                  ---
+  XGBoost (pointwise 17d)                    0.1524 N         154.5 mg/s            pointwise
+  LightGBM (pointwise 17d)                   0.1540 N         155.6 mg/s            pointwise
+  v2.0 Attention-LSTM (pointwise)            0.0832 N          49.1 mg/s            pointwise
+==========================================================================================
+
+=====================================================================================
+  Per-Mode Thrust RMSE (window-mean, N) — same test windows
+  Test Mode          XGBoost   LightGBM       LSTM       Best
+  --------------- ---------- ---------- ---------- ----------
+  ssf                 0.1875     0.2074     0.1234       LSTM
+  health_check        0.0541     0.0568     0.0319       LSTM
+  ramp1               0.0968     0.1019     0.0734       LSTM
+  ramp2               0.1087     0.1132     0.0746       LSTM
+  ramp3               0.1343     0.1392     0.1027       LSTM
+  ramp4               0.1621     0.1613     0.1115       LSTM
+  onmod               0.0137     0.0105     0.0091       LSTM
+  offmod              0.1192     0.1247     0.0827       LSTM
+  random_short        0.1104     0.1116     0.0701       LSTM
+  random_long         0.1563     0.1638     0.1017       LSTM
+  random_mixed        0.1519     0.1582     0.0909       LSTM
+
+  Per-Mode MFR RMSE (window-mean, mg/s) — same test windows
+  Test Mode          XGBoost   LightGBM       LSTM       Best
+  --------------- ---------- ---------- ---------- ----------
+  ssf                  226.6      239.3      126.0       LSTM
+  health_check          60.3       64.3       28.7       LSTM
+  ramp1                113.1      116.3       84.2       LSTM
+  ramp2                124.9      127.1       87.7       LSTM
+  ramp3                158.7      160.4      118.8       LSTM
+  ramp4                198.9      192.6      131.7       LSTM
+  onmod                 15.7       11.9       11.5       LSTM
+  offmod               141.5      147.2       95.5       LSTM
+  random_short         128.1      132.1       79.4       LSTM
+  random_long          192.1      195.7      119.8       LSTM
+  random_mixed         183.8      189.4      104.1       LSTM
+=====================================================================================
+
+============================================================
+  Per-Mode Thrust RMSE (pointwise, N)
+  Test Mode          XGBoost   LightGBM
+  --------------- ---------- ----------
+  ssf                 0.1531     0.1541
+  health_check        0.1361     0.1347
+  ramp1               0.1903     0.1920
+  ramp2               0.1895     0.1906
+  ramp3               0.1353     0.1380
+  ramp4               0.1607     0.1654
+  onmod               0.0447     0.0475
+  offmod              0.1604     0.1621
+  random_short        0.1733     0.1744
+  random_long         0.1415     0.1460
+  random_mixed        0.1555     0.1591
+============================================================
+
+[Chart] Saving comparison chart...
+  Saved -> outputs/figures/v2/baseline_ml_comparison.png
+
+======================================================================
+  ANALYSIS
+======================================================================
+  1. Window-mean comparison (apples-to-apples, same test windows):
+     Best tree thrust: 0.1151 N  |  LSTM: 0.0769 N  |  Delta: +0.0382 N
+     Best tree mfr:    138.8 mg/s  |  LSTM: 86.9 mg/s  |  Delta: +51.9 mg/s
+
+  2. Pointwise comparison (directly comparable to LSTM):
+     Best tree thrust: 0.1524 N  |  LSTM v2.0: 0.0832 N  |  Delta: +0.0692 N
+     Best tree mfr:    154.5 mg/s  |  LSTM v2.0: 49.1 mg/s  |  Delta: +105.4 mg/s
+
+  3. Per-mode analysis (window-mean thrust, engineered):
+     --- STEADY-STATE ---
+     ssf              Tree=0.1875  LSTM=0.1234  gap=+0.0641 N  *** TREE MUCH WORSE
+     health_check     Tree=0.0541  LSTM=0.0319  gap=+0.0222 N  *** TREE MUCH WORSE
+     --- TRANSIENT ---
+     offmod           Tree=0.1192  LSTM=0.0827  gap=+0.0366 N  *** TREE MUCH WORSE
+     random_short     Tree=0.1104  LSTM=0.0701  gap=+0.0403 N  *** TREE MUCH WORSE
+     random_long      Tree=0.1563  LSTM=0.1017  gap=+0.0547 N  *** TREE MUCH WORSE
+     random_mixed     Tree=0.1519  LSTM=0.0909  gap=+0.0610 N  *** TREE MUCH WORSE
+
+  4. CONCLUSION:
+     Thrust: tree models (no temporal context) vs LSTM (200-step memory)
+       -> LSTM outperforms by -0.0692 N on thrust (pointwise)
+       -> LSTM outperforms by -105.4 mg/s on MFR (pointwise)
+       -> MFR prediction BENEFITS from temporal context substantially
+======================================================================
+
+Done.

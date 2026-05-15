@@ -236,129 +236,347 @@ def predict_with_uncertainty(model, x_tensor, n_samples=30, device=None):
 # 残差计算与异常检测
 # ═══════════════════════════════════════════
 
-def compute_residuals(pred_thrust, actual_thrust, threshold=0.6):
-    """
-    计算推力残差，根据阈值判断异常步。
+# 传感器测量噪声标准差
+THRUST_NOISE_STD = 0.005   # N
+MFR_NOISE_STD    = 0.5     # mg/s
+ISP_NOISE_STD    = 13.5    # s — error-propagated: sqrt((dIsp/dT*0.005)^2+(dIsp/dM*0.5)^2) at nominal 1.5N/80mg/s
 
-    参数
-    ----
-    pred_thrust : np.ndarray
-        预测推力 (N)
-    actual_thrust : np.ndarray
-        实际推力 (N)
+# 模型基准 RMSE（v2.0 测试集）
+REF_RMSE_THRUST = 0.0832   # N
+REF_RMSE_MFR    = 20.8     # mg/s
+# REF_RMSE_ISP computed dynamically via error propagation at data mean operating point
+
+
+def _sigma_anomaly_mask(pred, actual, mc_std, noise_std, k=3.0):
+    """Sigma-based anomaly detection: |pred - actual| > k * sqrt(mc_std^2 + noise_std^2)."""
+    sigma = np.sqrt(mc_std ** 2 + noise_std ** 2)
+    z_score = np.abs(pred - actual) / (sigma + EPS)
+    return z_score > k, z_score
+
+
+def _compute_drift(residuals, ref_rmse, seq_len=200):
+    """Linear drift detection on residual series.
+    Returns (normalized_slope, pvalue, level)."""
+    t = np.arange(len(residuals))
+    slope, intercept = np.polyfit(t, residuals, 1)
+    # Normalize: slope * seq_len gives total drift over window, divide by ref_rmse
+    drift = slope * seq_len / (ref_rmse + EPS)
+    # Rough significance: correlation coefficient
+    corr = np.corrcoef(t, residuals)[0, 1]
+    abs_drift = abs(drift)
+    if abs_drift < 0.5:
+        level = 'stable'
+    elif abs_drift < 1.0:
+        level = 'mild'
+    elif abs_drift < 2.0:
+        level = 'noticeable'
+    else:
+        level = 'severe'
+    return drift, corr, level
+
+
+def _accuracy_score(rms, ref_rmse):
+    """Map RMS/REF ratio to 0-100 score with nonlinear decay."""
+    ratio = rms / (ref_rmse + EPS)
+    if ratio <= 1.0:
+        return 100
+    elif ratio <= 1.5:
+        return int(100 - 30 * (ratio - 1.0) / 0.5)
+    elif ratio <= 2.5:
+        return int(70 - 30 * (ratio - 1.5) / 1.0)
+    elif ratio <= 4.0:
+        return int(40 - 25 * (ratio - 2.5) / 1.5)
+    elif ratio <= 8.0:
+        return int(15 - 10 * (ratio - 4.0) / 4.0)
+    else:
+        return 5
+
+
+def _anomaly_score(anomaly_ratio):
+    """Exponential decay: 0% -> 100, 5% -> 61, 10% -> 37, 20% -> 14."""
+    return int(100 * np.exp(-10.0 * anomaly_ratio))
+
+
+def _health_level(score):
+    if score >= 70:
+        return 'good'
+    elif score >= 40:
+        return 'warning'
+    else:
+        return 'critical'
+
+
+def compute_residuals(pred_thrust, actual_thrust, threshold=0.6,
+                      pred_mfr=None, actual_mfr=None,
+                      pred_isp=None, actual_isp=None,
+                      thrust_std=None, mfr_std=None, isp_std=None):
+    """
+    Multi-dimensional residual analysis.
+
+    When MC uncertainty (thrust_std/mfr_std/isp_std) is provided, uses sigma-based
+    statistical anomaly detection (3-sigma rule). Otherwise falls back to hard threshold.
+
+    Parameters
+    ----------
+    pred_thrust, actual_thrust : np.ndarray
     threshold : float
-        残差阈值，默认 0.6 N
+        Fallback hard threshold when MC uncertainty unavailable.
+    pred_mfr, actual_mfr : np.ndarray, optional
+    pred_isp, actual_isp : np.ndarray, optional
+    thrust_std, mfr_std, isp_std : np.ndarray, optional
+        MC Dropout per-point standard deviations.
 
-    返回
-    ----
-    residuals : np.ndarray
-        绝对残差 |pred - actual|
-    is_anomaly : np.ndarray (bool)
-        True 表示该时间步异常
-    anomaly_ratio : float
-        异常步占比
+    Returns
+    -------
+    dict with keys: residuals, is_anomaly, anomaly_ratio (for thrust),
+    plus mfr_*, isp_* if optional inputs provided.
+    All masks use sigma-based detection when uncertainty is available.
     """
-    residuals = np.abs(pred_thrust - actual_thrust)
-    is_anomaly = residuals > threshold
-    anomaly_ratio = is_anomaly.mean()
-    return residuals, is_anomaly, anomaly_ratio
+    has_uncertainty = (thrust_std is not None)
 
-
-# ═══════════════════════════════════════════
-# 健康诊断报告
-# ═══════════════════════════════════════════
-
-def _health_score(value, good, warn, bad, lower_is_better=False):
-    """根据阈值返回健康评分 0-100 和等级（结果钳制在 [0, 100]）"""
-    if lower_is_better:
-        if value <= good:   score = 100
-        elif value <= warn: score = 60 - 40*(value-good)/(warn-good)
-        else:               score = 20 - 20*(value-warn)/(bad-warn)
+    if has_uncertainty:
+        t_mask, t_z = _sigma_anomaly_mask(pred_thrust, actual_thrust,
+                                           thrust_std, THRUST_NOISE_STD)
     else:
-        if value >= good:   score = 100
-        elif value >= warn: score = 60 - 40*(good-value)/(good-warn)
-        else:               score = 20 - 20*(warn-value)/(warn-bad)
-    score = max(0, min(100, score))
-    level = 'good' if score >= 70 else ('warning' if score >= 40 else 'critical')
-    return int(score), level
+        t_res = np.abs(pred_thrust - actual_thrust)
+        t_mask = t_res > threshold
+
+    result = {
+        'residuals': np.abs(pred_thrust - actual_thrust),
+        'is_anomaly': t_mask,
+        'anomaly_ratio': float(t_mask.mean()),
+    }
+
+    if pred_mfr is not None and actual_mfr is not None:
+        if has_uncertainty and mfr_std is not None:
+            m_mask, _ = _sigma_anomaly_mask(pred_mfr, actual_mfr,
+                                             mfr_std, MFR_NOISE_STD)
+        else:
+            m_res = np.abs(pred_mfr - actual_mfr)
+            mfr_thr = threshold * (2000.0 / 8.0)  # scale proportional to MFR_MAX/THRUST_SCALE
+            m_mask = m_res > mfr_thr
+        result['mfr_residuals'] = np.abs(pred_mfr - actual_mfr)
+        result['mfr_is_anomaly'] = m_mask
+        result['mfr_anomaly_ratio'] = float(m_mask.mean())
+
+    if pred_isp is not None and actual_isp is not None:
+        if has_uncertainty and isp_std is not None:
+            isp_noise = ISP_NOISE_STD
+            i_mask, _ = _sigma_anomaly_mask(pred_isp, actual_isp,
+                                             isp_std, isp_noise)
+        else:
+            i_res = np.abs(pred_isp - actual_isp)
+            i_mask = i_res > threshold * 50
+        result['isp_residuals'] = np.abs(pred_isp - actual_isp)
+        result['isp_is_anomaly'] = i_mask
+        result['isp_anomaly_ratio'] = float(i_mask.mean())
+
+    return result
 
 
-def generate_health_report(thrust, mfr, isp, is_anomaly=None,
-                           residual_rms=None):
+def _compute_consistency(masks):
+    """Cross-dimension anomaly consistency via Jaccard index.
+    High consistency (all dims anomalous together) suggests real fault.
+    Low consistency (isolated anomalies) suggests sensor noise.
+
+    Args:
+        masks: dict with keys 'thrust','mfr','isp' -> bool arrays
+    Returns:
+        (jaccard_score_0_to_100, level, detail_string)
     """
-    生成推进器健康诊断报告。
-    评分基于**预测精度（残差）**和**异常占比**，而非绝对值阈值。
+    t = masks['thrust'].astype(int)
+    m = masks['mfr'].astype(int)
+    i = masks['isp'].astype(int)
 
-    参数
-    ----
-    thrust : np.ndarray
-        推力预测序列 (N)
-    mfr : np.ndarray
-        质量流量预测序列 (mg/s)
-    isp : np.ndarray
-        比冲序列 (s)
-    is_anomaly : np.ndarray (bool), optional
-        异常步标签（残差 > 阈值）
-    residual_rms : float, optional
-        残差均方根（预测精度指标）
+    intersection = (t & m & i).sum()
+    union = (t | m | i).sum()
 
-    返回
-    ----
-    report : dict
-    """
-    t_mean = float(np.mean(thrust)) if isinstance(thrust, np.ndarray) else thrust
-    m_mean = float(np.mean(mfr))    if isinstance(mfr, np.ndarray)    else mfr
-    i_mean = float(np.mean(isp))    if isinstance(isp, np.ndarray)    else isp
+    total_anomalies = union
+    total_points = len(t)
 
-    # —— 评分逻辑：基于预测精度，用模型测试 RMSE（0.0832N）校准 ——
-    MODEL_RMSE = 0.0832
-    if residual_rms is not None:
-        ratio = residual_rms / MODEL_RMSE
-        if ratio <= 1.5:    acc_score = 100
-        elif ratio <= 3.0:  acc_score = 80 - (ratio - 1.5) / 1.5 * 40
-        elif ratio <= 5.0:  acc_score = 40 - (ratio - 3.0) / 2.0 * 30
-        else:               acc_score = 10
-        acc_score = max(0, min(100, acc_score))
-        acc_level = 'good' if acc_score >= 70 else ('warning' if acc_score >= 40 else 'critical')
+    if total_anomalies == 0:
+        return 100, 'nominal', '三维均无异常'
+
+    # When anomalies are very sparse, Jaccard is unreliable
+    if total_anomalies < 0.05 * total_points:
+        return 100, 'nominal', '异常点极少（<' + str(int(total_anomalies)) + '步），一致性分析不适用'
+
+    jaccard = intersection / total_anomalies  # 0 to 1
+    # High Jaccard = anomalies overlap across dims = likely real fault = LOW score
+    # Low Jaccard = scattered, likely sensor noise = HIGH score (leniency)
+    score = int(100 * (1.0 - jaccard))
+
+    if jaccard >= 0.5:
+        level = 'consistent'
+        detail = '三维异常高度一致，可能存在真实推进器故障'
+    elif jaccard >= 0.2:
+        level = 'partial'
+        detail = '部分维度异常重合，建议关注'
     else:
-        acc_score = 100
-        acc_level = 'good'
+        level = 'scattered'
+        detail = '异常分散在各维度，倾向于传感器噪声'
 
-    # —— 异常占比 ——
-    anomaly_ratio = 0.0
-    anom_level = 'normal'
-    if is_anomaly is not None:
-        anomaly_ratio = float(np.mean(is_anomaly))
-        anom_level = 'critical' if anomaly_ratio > 0.2 else (
-                     'warning' if anomaly_ratio > 0.05 else 'normal')
+    return score, level, detail
 
-    # —— 综合评分：精度权重 0.6 + 异常权重 0.4 ——
-    anom_score = max(0, 100 - anomaly_ratio / 0.2 * 100)
-    overall = int(0.6 * acc_score + 0.4 * anom_score)
 
-    summary_text = '运行正常' if overall >= 70 else '需关注' if overall >= 40 else '建议检修'
+def generate_health_report(thrust_pred, mfr_pred, isp_pred,
+                           thrust_actual, mfr_actual, isp_actual,
+                           thrust_std=None, mfr_std=None, isp_std=None,
+                           model_confidence=None):
+    """
+    Multi-dimensional scientific health scoring.
 
-    # —— 各指标状态（基于运行数据的统计描述，非评分）——
-    def _desc(v, u):
-        return f'{v:.2f}'.rstrip('0').rstrip('.') if abs(v) < 1 else f'{v:.1f}'.rstrip('0').rstrip('.') if abs(v) < 100 else f'{v:.0f}'
+    Six dimensions evaluated:
+      Per-metric (thrust/MFR/Isp):
+        - Accuracy Score: RMS residual vs reference RMSE
+        - Anomaly Score: sigma-based anomaly ratio (exponential decay)
+      Cross-dimension:
+        - Drift Detection: linear trend on residuals
+        - Consistency: Jaccard overlap of anomaly masks across dimensions
+
+    Composite:
+      per_dim = 0.5*accuracy + 0.5*anomaly
+      dim_avg = mean(thrust, mfr, isp)
+      overall = dim_avg * (0.85 + 0.15*consistency/100)
+
+    Returns
+    -------
+    report : dict with overall_health, summary, per-dimension scores, and diagnostics
+    """
+    seq_len = len(thrust_pred)
+    has_uncertainty = (thrust_std is not None)
+
+    # --- Reference RMS (Isp computed via error propagation at data mean) ---
+    t_mean = float(np.mean(thrust_pred))
+    m_mean = float(np.mean(mfr_pred))
+    C = 1e-6 * G0
+    dIsp_dT = 1.0 / (m_mean * C + EPS)
+    dIsp_dM = t_mean / (m_mean**2 * C + EPS)  # abs value
+    ref_isp_rmse = np.sqrt((dIsp_dT * REF_RMSE_THRUST)**2 + (dIsp_dM * REF_RMSE_MFR)**2)
+    # Dynamic Isp noise: same error propagation with sensor noise instead of model RMSE
+    isp_noise_dyn = np.sqrt((dIsp_dT * THRUST_NOISE_STD)**2 + (dIsp_dM * MFR_NOISE_STD)**2)
+
+    refs = {
+        'thrust': REF_RMSE_THRUST,
+        'mfr': REF_RMSE_MFR,
+        'isp': ref_isp_rmse,
+    }
+    noise_stds = {
+        'thrust': THRUST_NOISE_STD,
+        'mfr': MFR_NOISE_STD,
+        'isp': isp_noise_dyn,
+    }
+
+    dims = {}
+    all_anomaly_masks = {}
+    drift_summaries = []
+
+    for dim_name, pred, actual, std in [
+        ('thrust', thrust_pred, thrust_actual, thrust_std),
+        ('mfr', mfr_pred, mfr_actual, mfr_std),
+        ('isp', isp_pred, isp_actual, isp_std),
+    ]:
+        residuals = np.abs(pred - actual)
+        rms = float(np.sqrt(np.mean(residuals ** 2)))
+
+        # Accuracy
+        acc = _accuracy_score(rms, refs[dim_name])
+
+        # Anomaly detection
+        if has_uncertainty and std is not None:
+            mask, z_score = _sigma_anomaly_mask(pred, actual, std, noise_stds[dim_name])
+        else:
+            mask = residuals > 0.25  # fallback
+        anom_ratio = float(mask.mean())
+        anom = _anomaly_score(anom_ratio)
+        n_anom = int(mask.sum())
+
+        # Drift
+        drift, drift_corr, drift_level = _compute_drift(residuals, refs[dim_name], seq_len)
+
+        dim_score = int(0.5 * acc + 0.5 * anom)
+
+        dims[dim_name] = {
+            'accuracy': acc,
+            'anomaly': anom,
+            'dim_score': dim_score,
+            'rms': rms,
+            'anomaly_ratio': anom_ratio,
+            'n_anomaly': n_anom,
+            'total_steps': seq_len,
+            'drift': drift,
+            'drift_corr': drift_corr,
+            'drift_level': drift_level,
+        }
+
+        all_anomaly_masks[dim_name] = mask
+
+        if drift_level != 'stable':
+            direction = '上升' if drift > 0 else '下降'
+            drift_summaries.append(
+                f'{dim_name_map_cn(dim_name)}残差{direction}趋势 (drift={drift:.2f}σ)')
+
+    # --- Consistency ---
+    cons_score, cons_level, cons_detail = _compute_consistency(all_anomaly_masks)
+
+    # --- Composite ---
+    dim_avg = np.mean([dims[d]['dim_score'] for d in ['thrust', 'mfr', 'isp']])
+    consistency_factor = 0.85 + 0.15 * cons_score / 100.0
+    overall = int(dim_avg * consistency_factor)
+    overall = max(0, min(100, overall))
+    level = _health_level(overall)
+
+    # --- Summary text ---
+    if overall >= 70:
+        summary = '运行正常'
+    elif overall >= 40:
+        reasons = []
+        for d in ['thrust', 'mfr', 'isp']:
+            if dims[d]['dim_score'] < 60:
+                reasons.append(f'{dim_name_map_cn(d)}评分偏低({dims[d]["dim_score"]})')
+        if cons_level != 'nominal':
+            reasons.append(cons_detail)
+        if drift_summaries:
+            reasons.append('; '.join(drift_summaries))
+        summary = '需关注 —— ' + ('; '.join(reasons) if reasons else '指标轻度偏离')
+    else:
+        summary = '建议检修 —— 多项指标显著偏离基准'
+
+    # --- Telemetry ---
+    def _desc(v):
+        if abs(v) < 1: return f'{v:.3f}'.rstrip('0').rstrip('.')
+        elif abs(v) < 100: return f'{v:.1f}'.rstrip('0').rstrip('.')
+        else: return f'{v:.0f}'
+
+    # --- Model confidence ---
+    conf_score = model_confidence if model_confidence is not None else 90
+    conf_level = _health_level(conf_score)
 
     return {
-        'summary': f"综合健康评分 {overall}/100 —— {summary_text}",
-        'prediction_accuracy': {
-            'score': int(acc_score),
-            'level': acc_level,
-            'detail': f'预测残差 {residual_rms:.4f} N' if residual_rms else '正常'
+        'overall_health': overall,
+        'health_level': level,
+        'summary': f'综合健康评分 {overall}/100 —— {summary}',
+        'thrust': dims['thrust'],
+        'mfr': dims['mfr'],
+        'isp': dims['isp'],
+        'consistency': {
+            'score': cons_score,
+            'level': cons_level,
+            'detail': cons_detail,
         },
-        'anomaly_status': {
-            'anomaly_ratio': anomaly_ratio,
-            'n_anomaly': int(is_anomaly.sum()) if is_anomaly is not None else 0,
-            'total_steps': len(is_anomaly) if is_anomaly is not None else 0,
-            'level': anom_level,
+        'drift_summary': '; '.join(drift_summaries) if drift_summaries else '无显著漂移',
+        'model_confidence': {
+            'score': conf_score,
+            'level': conf_level,
         },
         'telemetry': {
-            'thrust': f'{_desc(t_mean, "N")} N',
-            'mfr':    f'{_desc(m_mean, "mg/s")} mg/s',
-            'isp':    f'{_desc(i_mean, "s")} s',
+            'thrust': f'{_desc(np.mean(thrust_pred))} N',
+            'mfr':    f'{_desc(np.mean(mfr_pred))} mg/s',
+            'isp':    f'{_desc(np.mean(isp_pred))} s',
         },
-        'overall_health': overall,
     }
+
+
+def dim_name_map_cn(name):
+    _map = {'thrust': '推力', 'mfr': '质量流量', 'isp': '比冲'}
+    return _map.get(name, name)
