@@ -589,6 +589,62 @@ section[data-testid="stSidebar"] {{
 .source-bar .label {{ color: {TEXT_DIM}; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 1.5px; }}
 .source-bar .value {{ color: {TEXT_PRIMARY}; font-weight: 600; }}
 .source-bar .accent {{ color: {DATA_CYAN}; font-weight: 600; }}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {{
+    gap: 0;
+    background: {BG_PANEL};
+    border: 1px solid {BORDER};
+    border-bottom: 3px solid {NASA_RED};
+    padding: 0;
+}}
+.stTabs [data-baseweb="tab"] {{
+    background: transparent;
+    color: {TEXT_SECONDARY};
+    border: none;
+    border-right: 1px solid {BORDER};
+    padding: 16px 32px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+    border-radius: 0;
+}}
+.stTabs [aria-selected="true"] {{
+    background: {BG_PANEL_HI};
+    color: {DATA_CYAN};
+    border-bottom: 3px solid {DATA_CYAN};
+    margin-bottom: -3px;
+}}
+.stTabs [data-baseweb="tab"]:hover {{
+    background: {BG_PANEL_HI};
+    color: {TEXT_PRIMARY};
+}}
+
+/* Breathing status indicator */
+@keyframes status-pulse {{
+    0%, 100% {{
+        box-shadow: 0 0 0 0 rgba(46, 230, 134, 0.5),
+                    0 0 12px rgba(46, 230, 134, 0.6);
+        transform: scale(1);
+    }}
+    50% {{
+        box-shadow: 0 0 0 8px rgba(46, 230, 134, 0),
+                    0 0 16px rgba(46, 230, 134, 0.8);
+        transform: scale(1.15);
+    }}
+}}
+.mission-status .dot {{
+    display: inline-block;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: {DATA_GREEN};
+    margin-right: 8px;
+    animation: status-pulse 1.8s ease-in-out infinite;
+}}
+.mission-status.alert .dot {{
+    background: {NASA_RED};
+    animation: status-pulse 0.9s ease-in-out infinite;
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -611,7 +667,7 @@ st.markdown(f"""
             <span class="sep">·</span>
             上海大学
             <span class="sep">·</span>
-            <span class="en-tag">CRAIC 2026 · v2.0 ATTN-LSTM</span>
+            <span class="en-tag">CRAIC 2026 · v3.0 ATTN-LSTM</span>
         </div>
     </div>
     <div class="mission-status">
@@ -764,10 +820,10 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown("""
-    <div class="sidebar-section-title" style="margin-top:24px;">诊断操作</div>
-    <div class="sidebar-section-en">DIAGNOSTIC ACTION</div>
+    <div style="margin-top:24px;font-size:12px;color:{TEXT_DIM};">
+        健康报告已移至「健康报告」标签页
+    </div>
     """, unsafe_allow_html=True)
-    generate_report = st.button("生成健康报告")
 
     st.markdown(f"""
     <div style="margin-top:36px;padding-top:18px;border-top:1px solid {BORDER};
@@ -1097,8 +1153,17 @@ if uploaded_file is not None:
         </div>
         """, unsafe_allow_html=True)
 
-    # ── 实时遥测曲线 ──
-    section_header("实时遥测曲线", "REAL-TIME TELEMETRY")
+    # ── 4 个标签页 ──
+    tab_telem, tab_anom, tab_report, tab_shap = st.tabs([
+        "实时遥测",
+        "异常检测",
+        "健康报告",
+        "SHAP 归因",
+    ])
+
+    # ═══════════════════ 标签页 1：实时遥测 ═══════════════════
+    with tab_telem:
+        section_header("实时遥测曲线", "REAL-TIME TELEMETRY")
 
     t_axis = np.arange(SEQ_LEN)
     # Per-dimension anomaly masks for highlighting
@@ -1128,8 +1193,9 @@ if uploaded_file is not None:
     plt.tight_layout(pad=2.0)
     render_fig(fig_tel)
 
-    # ── 异常检测 ──
-    section_header("异常检测与残差监控", "ANOMALY DETECTION")
+    # ═══════════════════ 标签页 2：异常检测 ═══════════════════
+    with tab_anom:
+        section_header("异常检测与残差监控", "ANOMALY DETECTION")
 
     # Dynamic thresholds: show sigma-based when available, fallback to hard threshold
     if has_mc:
@@ -1200,126 +1266,128 @@ if uploaded_file is not None:
         </div>
         """, unsafe_allow_html=True)
 
-    # ── 健康报告 ──
-    if generate_report:
+    # ═══════════════════ 标签页 3：健康报告 ═══════════════════
+    with tab_report:
         section_header("健康诊断报告", "DIAGNOSTIC REPORT")
-        with st.spinner("正在生成诊断报告..."):
-            report = generate_health_report(
-                thrust_pred, mfr_pred, isp,
-                actual_thrust, actual_mfr, actual_isp,
-                thrust_std=_t_std, mfr_std=_m_std, isp_std=_i_std,
-                model_confidence=model_conf)
+        gen_report = st.button("生成健康报告", key="gen_report_btn")
+        if gen_report:
+            with st.spinner("正在生成诊断报告..."):
+                report = generate_health_report(
+                    thrust_pred, mfr_pred, isp,
+                    actual_thrust, actual_mfr, actual_isp,
+                    thrust_std=_t_std, mfr_std=_m_std, isp_std=_i_std,
+                    model_confidence=model_conf)
 
-        overall = report['overall_health']
+            overall = report['overall_health']
 
-        # ── Save to history ──
-        hist_entry = {
-            'filename': fname,
-            'thrust_dim': report['thrust']['dim_score'],
-            'mfr_dim': report['mfr']['dim_score'],
-            'isp_dim': report['isp']['dim_score'],
-            'consistency': report['consistency']['score'],
-            'mc': report['model_confidence']['score'],
-        }
-        st.session_state.history_reports.append(hist_entry)
-        st.session_state.history_reports = st.session_state.history_reports[-10:]
+            # ── Save to history ──
+            hist_entry = {
+                'filename': fname,
+                'thrust_dim': report['thrust']['dim_score'],
+                'mfr_dim': report['mfr']['dim_score'],
+                'isp_dim': report['isp']['dim_score'],
+                'consistency': report['consistency']['score'],
+                'mc': report['model_confidence']['score'],
+            }
+            st.session_state.history_reports.append(hist_entry)
+            st.session_state.history_reports = st.session_state.history_reports[-10:]
 
-        # ── Summary big number ──
-        lvl_cn = {'good': '正常', 'warning': '需关注', 'critical': '建议检修'}
-        lvl_color = {'good': DATA_GREEN, 'warning': DATA_AMBER, 'critical': NASA_RED}
-        st.markdown(f"""
-        <div class="report-card" style="text-align:center;margin-bottom:18px;">
-            <div style="font-size:60px;font-weight:800;font-family:'JetBrains Mono',monospace;
-                        color:{lvl_color.get(report['health_level'], DATA_CYAN)};line-height:1;">
-                {overall}<span style="font-size:24px;">/100</span>
+            # ── Summary big number ──
+            lvl_cn = {'good': '正常', 'warning': '需关注', 'critical': '建议检修'}
+            lvl_color = {'good': DATA_GREEN, 'warning': DATA_AMBER, 'critical': NASA_RED}
+            st.markdown(f"""
+            <div class="report-card" style="text-align:center;margin-bottom:18px;">
+                <div style="font-size:60px;font-weight:800;font-family:'JetBrains Mono',monospace;
+                            color:{lvl_color.get(report['health_level'], DATA_CYAN)};line-height:1;">
+                    {overall}<span style="font-size:24px;">/100</span>
+                </div>
+                <div style="font-size:17px;color:{TEXT_PRIMARY};font-weight:600;margin-top:8px;">
+                    {lvl_cn.get(report['health_level'], '未知')} · {report['summary']}
+                </div>
             </div>
-            <div style="font-size:17px;color:{TEXT_PRIMARY};font-weight:600;margin-top:8px;">
-                {lvl_cn.get(report['health_level'], '未知')} · {report['summary']}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
-        # ── Radar chart ──
-        prev = st.session_state.history_reports[-2] if len(st.session_state.history_reports) > 1 else None
-        fig_radar = render_health_radar(report, history_report=prev)
-        col_radar, col_spacer = st.columns([3, 1])
-        with col_radar:
-            render_fig(fig_radar)
+            # ── Radar chart ──
+            prev = st.session_state.history_reports[-2] if len(st.session_state.history_reports) > 1 else None
+            fig_radar = render_health_radar(report, history_report=prev)
+            col_radar, col_spacer = st.columns([3, 1])
+            with col_radar:
+                render_fig(fig_radar)
 
-        # ── Dimension details (expander) ──
-        with st.expander("查看维度详情 Dimension Details", expanded=False):
-            def _bar(s):
-                return f'<span class="score-bar"><span class="score-fill" style="width:{max(0,min(100,s))}%"></span></span>'
-            def _badge(lv):
-                cls = 'level-good' if lv in ('good','stable','nominal') else \
-                      'level-warning' if lv in ('warning','mild','partial','scattered') else \
-                      'level-critical'
-                return f'<span class="{cls}">● {lv.upper()}</span>'
-            def _drift_badge(lv):
-                if lv == 'stable': return '<span style="color:#2EE686;">▬ 稳定</span>'
-                if lv == 'mild': return '<span style="color:#FFC940;">↗ 轻微漂移</span>'
-                if lv == 'noticeable': return '<span style="color:#FF8A4D;">↗ 明显漂移</span>'
-                return '<span style="color:#FF4D2E;">↗ 严重漂移</span>'
+            # ── Dimension details (expander) ──
+            with st.expander("查看维度详情 Dimension Details", expanded=False):
+                def _bar(s):
+                    return f'<span class="score-bar"><span class="score-fill" style="width:{max(0,min(100,s))}%"></span></span>'
+                def _badge(lv):
+                    cls = 'level-good' if lv in ('good','stable','nominal') else \
+                          'level-warning' if lv in ('warning','mild','partial','scattered') else \
+                          'level-critical'
+                    return f'<span class="{cls}">● {lv.upper()}</span>'
+                def _drift_badge(lv):
+                    if lv == 'stable': return '<span style="color:#2EE686;">▬ 稳定</span>'
+                    if lv == 'mild': return '<span style="color:#FFC940;">↗ 轻微漂移</span>'
+                    if lv == 'noticeable': return '<span style="color:#FF8A4D;">↗ 明显漂移</span>'
+                    return '<span style="color:#FF4D2E;">↗ 严重漂移</span>'
 
-            dims = ['thrust', 'mfr', 'isp']
-            dim_labels_cn = ['推力', '质量流量', '比冲']
-            dim_units = ['N', 'mg/s', 's']
+                dims = ['thrust', 'mfr', 'isp']
+                dim_labels_cn = ['推力', '质量流量', '比冲']
+                dim_units = ['N', 'mg/s', 's']
 
-            rows_html = ''
-            for d, cn, u in zip(dims, dim_labels_cn, dim_units):
-                dd = report[d]
-                rows_html += f"""
-                <tr>
-                    <td><b>{cn}</b> <span style="font-size:10px;color:{TEXT_DIM};">{d.upper()}</span></td>
-                    <td>RMS={dd['rms']:.4f} {u} | 异常 {dd['n_anomaly']}/{dd['total_steps']}步 ({dd['anomaly_ratio']*100:.1f}%)</td>
-                    <td>{_bar(dd['accuracy'])} {dd['accuracy']}/100</td>
-                    <td>{_badge(_health_level(dd['accuracy']))}</td>
-                </tr>
-                <tr>
-                    <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 异常评分</span></td>
-                    <td><span style="font-size:11px;color:{TEXT_DIM};">检测方法: {'3σ 统计' if has_mc else '硬阈值'} | 漂移: {_drift_badge(dd['drift_level'])}</span></td>
-                    <td>{_bar(dd['anomaly'])} {dd['anomaly']}/100</td>
-                    <td>{_badge(_health_level(dd['anomaly']))}</td>
-                </tr>
-                <tr>
-                    <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 维度综合</span></td>
-                    <td><span style="font-size:11px;color:{TEXT_DIM};">0.5×精度 + 0.5×异常</span></td>
-                    <td><b>{_bar(dd['dim_score'])} {dd['dim_score']}/100</b></td>
-                    <td>{_badge(_health_level(dd['dim_score']))}</td>
-                </tr>"""
-
-            cons = report['consistency']
-            mc = report['model_confidence']
-
-            st.html(f"""
-            <div style="background:{BG_PANEL};padding:16px 0;">
-            <table class="report-table">
-                <thead>
-                    <tr><th style="width:20%;">评估维度</th><th style="width:32%;">指标</th><th style="width:23%;">评分</th><th style="width:25%;">状态</th></tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                    <tr style="border-top:1px solid {BORDER};">
-                        <td><b>三维一致性</b></td>
-                        <td>{cons['detail']}<br><span style="font-size:11px;color:{TEXT_DIM};">Jaccard = 异常交集/并集，衡量多维度异常关联程度</span></td>
-                        <td>{_bar(cons['score'])} {cons['score']}/100</td>
-                        <td>{_badge(cons['level'])}</td>
+                rows_html = ''
+                for d, cn, u in zip(dims, dim_labels_cn, dim_units):
+                    dd = report[d]
+                    rows_html += f"""
+                    <tr>
+                        <td><b>{cn}</b> <span style="font-size:10px;color:{TEXT_DIM};">{d.upper()}</span></td>
+                        <td>RMS={dd['rms']:.4f} {u} | 异常 {dd['n_anomaly']}/{dd['total_steps']}步 ({dd['anomaly_ratio']*100:.1f}%)</td>
+                        <td>{_bar(dd['accuracy'])} {dd['accuracy']}/100</td>
+                        <td>{_badge(_health_level(dd['accuracy']))}</td>
                     </tr>
                     <tr>
-                        <td><b>模型置信度</b></td>
-                        <td>MC Dropout x20 变异系数<br><span style="font-size:11px;color:{TEXT_DIM};">反映模型对当前输入的确定性</span></td>
-                        <td>{_bar(mc['score'])} {mc['score']}/100</td>
-                        <td>{_badge(mc['level'])}</td>
+                        <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 异常评分</span></td>
+                        <td><span style="font-size:11px;color:{TEXT_DIM};">检测方法: {'3σ 统计' if has_mc else '硬阈值'} | 漂移: {_drift_badge(dd['drift_level'])}</span></td>
+                        <td>{_bar(dd['anomaly'])} {dd['anomaly']}/100</td>
+                        <td>{_badge(_health_level(dd['anomaly']))}</td>
                     </tr>
                     <tr>
-                        <td><b>漂移检测</b></td>
-                        <td colspan="2" style="font-size:13px;">{report['drift_summary']}</td>
-                        <td>{'<span style="color:#2EE686;">STABLE</span>' if report['drift_summary'] == '无显著漂移' else '<span style="color:#FF8A4D;">DRIFT</span>'}</td>
-                    </tr>
-                </tbody>
-            </table>
-            </div>
-            """)
+                        <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 维度综合</span></td>
+                        <td><span style="font-size:11px;color:{TEXT_DIM};">0.5×精度 + 0.5×异常</span></td>
+                        <td><b>{_bar(dd['dim_score'])} {dd['dim_score']}/100</b></td>
+                        <td>{_badge(_health_level(dd['dim_score']))}</td>
+                    </tr>"""
+
+                cons = report['consistency']
+                mc = report['model_confidence']
+
+                st.html(f"""
+                <div style="background:{BG_PANEL};padding:16px 0;">
+                <table class="report-table">
+                    <thead>
+                        <tr><th style="width:20%;">评估维度</th><th style="width:32%;">指标</th><th style="width:23%;">评分</th><th style="width:25%;">状态</th></tr>
+                    </thead>
+                    <tbody>
+                        {rows_html}
+                        <tr style="border-top:1px solid {BORDER};">
+                            <td><b>三维一致性</b></td>
+                            <td>{cons['detail']}<br><span style="font-size:11px;color:{TEXT_DIM};">Jaccard = 异常交集/并集，衡量多维度异常关联程度</span></td>
+                            <td>{_bar(cons['score'])} {cons['score']}/100</td>
+                            <td>{_badge(cons['level'])}</td>
+                        </tr>
+                        <tr>
+                            <td><b>模型置信度</b></td>
+                            <td>MC Dropout x20 变异系数<br><span style="font-size:11px;color:{TEXT_DIM};">反映模型对当前输入的确定性</span></td>
+                            <td>{_bar(mc['score'])} {mc['score']}/100</td>
+                            <td>{_badge(mc['level'])}</td>
+                        </tr>
+                        <tr>
+                            <td><b>漂移检测</b></td>
+                            <td colspan="2" style="font-size:13px;">{report['drift_summary']}</td>
+                            <td>{'<span style="color:#2EE686;">STABLE</span>' if report['drift_summary'] == '无显著漂移' else '<span style="color:#FF8A4D;">DRIFT</span>'}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                </div>
+                """)
 
         # ── 评分规则 (LaTeX) ──
         with st.expander("评分规则 Scoring Rules", expanded=False):
@@ -1356,6 +1424,45 @@ if uploaded_file is not None:
             \bigl[\,0.85 + 0.15 \times (1 - J)\,\bigr]
             """)
 
+    # ═══════════════════ 标签页 4：SHAP 归因 ═══════════════════
+    with tab_shap:
+        if shap_data is not None:
+            section_header("SHAP 特征归因分析", "ATTRIBUTION ANALYSIS")
+            col_s1, col_s2, col_s3 = st.columns(3)
+            for _col, _key, _title, _color in [
+                (col_s1, 'thrust', '推力 Thrust', '#e74c3c'),
+                (col_s2, 'mfr',    '质量流量 MFR', '#3498db'),
+                (col_s3, 'isp', '比冲 Isp', '#2ecc71'),
+            ]:
+                with _col:
+                    _vals = np.array(shap_data[_key], dtype=float).ravel()
+                    if _vals.ndim != 1 or len(_vals) != 17:
+                        st.write(f"⚠️ SHAP data shape error: {_key}={_vals.shape}")
+                        continue
+                    _idx = np.argsort(_vals)[-7:]
+                    _fig, _ax = plt.subplots(figsize=(4.5, 3.5))
+                    _ax.barh(range(len(_idx)), _vals[_idx], color=_color, alpha=0.8, height=0.6)
+                    _ax.set_yticks(range(len(_idx)))
+                    _lbls = [shap_data['feats'][i] for i in _idx]
+                    _ax.set_yticklabels(_lbls, fontsize=8)
+                    _ax.invert_yaxis()
+                    _ax.set_title(_title, fontsize=11, fontweight='bold', color=TEXT_PRIMARY,
+                                  fontproperties=CN_TITLE)
+                    _ax.tick_params(colors=TEXT_SECONDARY)
+                    _ax.set_xticks([])
+                    for _b, _v in zip(_ax.containers[0], _vals[_idx]):
+                        _ax.text(_b.get_width()*1.02, _b.get_y()+_b.get_height()/2,
+                                 f'{_v:.2e}', va='center', fontsize=7, color=TEXT_PRIMARY)
+                    for side in ['top','right','left','bottom']:
+                        _ax.spines[side].set_visible(False)
+                    render_fig(_fig)
+        else:
+            st.markdown(f"""
+            <div style="text-align:center;padding:60px;color:{TEXT_DIM};font-size:15px;">
+                SHAP 特征归因数据未加载。请在 outputs/predictions/v2/ 目录提供 shap_*.npy 文件。
+            </div>
+            """, unsafe_allow_html=True)
+
 else:
     st.markdown(f"""
     <div class="welcome-screen">
@@ -1366,7 +1473,7 @@ else:
             启动实时推力、质量流量、比冲三维健康监测与异常检测。
         </div>
         <div class="welcome-meta">
-            <span class="accent">v2.0</span> &nbsp; Attention-LSTM 双输出架构
+            <span class="accent">v3.0</span> &nbsp; Attention-LSTM 双输出架构
             &nbsp; <span style="color:{NASA_RED};font-weight:700;">/</span> &nbsp;
             17 维异质特征融合
             &nbsp; <span style="color:{NASA_RED};font-weight:700;">/</span> &nbsp;
@@ -1374,42 +1481,6 @@ else:
         </div>
     </div>
     """, unsafe_allow_html=True)
-
-
-# ════════════════════════════════════════════════════════════════════
-# SHAP 归因分析面板
-# ════════════════════════════════════════════════════════════════════
-
-if shap_data is not None:
-    section_header("SHAP 特征归因分析", "ATTRIBUTION ANALYSIS")
-    col_s1, col_s2, col_s3 = st.columns(3)
-    for _col, _key, _title, _color in [
-        (col_s1, 'thrust', '推力 Thrust', '#e74c3c'),
-        (col_s2, 'mfr',    '质量流量 MFR', '#3498db'),
-        (col_s3, 'isp', '比冲 Isp', '#2ecc71'),  # reuse thrust as placeholder
-    ]:
-        with _col:
-            _vals = np.array(shap_data[_key], dtype=float).ravel()
-            if _vals.ndim != 1 or len(_vals) != 17:
-                st.write(f"⚠️ SHAP data shape error: {_key}={_vals.shape}")
-                continue
-            _idx = np.argsort(_vals)[-7:]
-            _fig, _ax = plt.subplots(figsize=(4.5, 3.5))
-            _ax.barh(range(len(_idx)), _vals[_idx], color=_color, alpha=0.8, height=0.6)
-            _ax.set_yticks(range(len(_idx)))
-            _lbls = [shap_data['feats'][i] for i in _idx]
-            _ax.set_yticklabels(_lbls, fontsize=8, )
-            _ax.invert_yaxis()
-            _ax.set_title(_title, fontsize=11, fontweight='bold', color=TEXT_PRIMARY,
-                          fontproperties=CN_TITLE)
-            _ax.tick_params(colors=TEXT_SECONDARY)
-            _ax.set_xticks([])  # 隐藏横轴数值，减少杂乱
-            for _b, _v in zip(_ax.containers[0], _vals[_idx]):
-                _ax.text(_b.get_width()*1.02, _b.get_y()+_b.get_height()/2,
-                         f'{_v:.2e}', va='center', fontsize=7, color=TEXT_PRIMARY)
-            for side in ['top','right','left','bottom']:
-                _ax.spines[side].set_visible(False)
-            render_fig(_fig)
 
 # ════════════════════════════════════════════════════════════════════
 # 八、Footer
