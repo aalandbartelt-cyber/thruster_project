@@ -808,7 +808,39 @@ def _cv_to_confidence(cv):
     return MC_CONFIDENCE_VALUES[-1]
 
 
-def telemetry_card(label_cn, label_en, value, unit="", status="nominal", delta_text=None):
+def telemetry_card(label_cn, label_en, value, unit="", status="nominal", delta_text=None,
+                   sparkline_data=None):
+    spark_html = ""
+    if sparkline_data is not None and len(sparkline_data) > 1:
+        mid = len(sparkline_data) // 2
+        denom = np.mean(sparkline_data[:mid]) + EPS
+        delta_pct = (np.mean(sparkline_data[mid:]) - np.mean(sparkline_data[:mid])) / denom * 100
+        arrow = "↑" if delta_pct > 0.5 else "↓" if delta_pct < -0.5 else "→"
+        arrow_color = DATA_GREEN if abs(delta_pct) < 2 else DATA_AMBER if abs(delta_pct) < 5 else NASA_RED
+
+        y_min, y_max = sparkline_data.min(), sparkline_data.max()
+        rng = y_max - y_min
+        if rng < EPS:
+            rng = 1.0
+        norm = (sparkline_data - y_min) / rng
+        n = len(sparkline_data)
+        w, h = 80, 18
+        points = " ".join(f"{i*w/(n-1):.1f},{h-2-y*(h-4):.1f}" for i, y in enumerate(norm))
+
+        spark_html = f"""
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+            <svg width="80" height="18" viewBox="0 0 80 18"
+                 style="flex-shrink:0;">
+                <polyline points="{points}" fill="none"
+                          stroke="{arrow_color}" stroke-width="1.5"
+                          stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:13px;
+                         color:{arrow_color};font-weight:600;">
+                {arrow} {abs(delta_pct):.1f}%
+            </span>
+        </div>
+        """
     delta_html = ""
     if delta_text is not None:
         cls = "delta-good" if status == "nominal" else "delta-bad"
@@ -818,6 +850,7 @@ def telemetry_card(label_cn, label_en, value, unit="", status="nominal", delta_t
         <div class="telemetry-label-cn">{label_cn}</div>
         <div class="telemetry-label-en">{label_en}</div>
         <div class="telemetry-value">{value}<span class="telemetry-unit">{unit}</span></div>
+        {spark_html}
         {delta_html}
     </div>
     """, unsafe_allow_html=True)
@@ -985,10 +1018,14 @@ if uploaded_file is not None:
         anom_status, anom_delta = "critical", "严重异常"
 
     c1, c2, c3, c4 = st.columns(4)
-    with c1: telemetry_card("峰值推力",   "PEAK THRUST",      f"{peak_thrust:.2f}",      " N",    "nominal")
-    with c2: telemetry_card("平均质量流量","MEAN MASS FLOW",  f"{mean_mfr:.1f}",          " mg/s", "nominal")
-    with c3: telemetry_card("平均比冲",   "SPECIFIC IMPULSE", f"{mean_isp:.1f}",          " s",    "nominal")
-    with c4: telemetry_card("异常占比(3D)","ANOMALY RATIO 3D", f"{combined_anom_ratio*100:.2f}", " %",    anom_status, anom_delta)
+    with c1: telemetry_card("峰值推力",   "PEAK THRUST",      f"{peak_thrust:.2f}",      " N",    "nominal",
+                             sparkline_data=actual_thrust)
+    with c2: telemetry_card("平均质量流量","MEAN MASS FLOW",  f"{mean_mfr:.1f}",          " mg/s", "nominal",
+                             sparkline_data=actual_mfr)
+    with c3: telemetry_card("平均比冲",   "SPECIFIC IMPULSE", f"{mean_isp:.1f}",          " s",    "nominal",
+                             sparkline_data=isp)
+    with c4: telemetry_card("异常占比(3D)","ANOMALY RATIO 3D", f"{combined_anom_ratio*100:.2f}", " %",    anom_status, anom_delta,
+                             sparkline_data=combined_anom_mask.astype(float))
 
     if is_tuned_model:
         st.markdown(f"""
