@@ -633,6 +633,8 @@ if 'active_sn' not in st.session_state:
     st.session_state.active_sn = None
 if 'adapter_loaded_sn' not in st.session_state:
     st.session_state.adapter_loaded_sn = None
+if 'history_reports' not in st.session_state:
+    st.session_state.history_reports = []
 
 
 @st.cache_resource
@@ -888,6 +890,64 @@ def apply_cn_to_axis(ax, title=None, xlabel=None, ylabel=None):
     if leg is not None:
         for txt in leg.get_texts():
             txt.set_fontproperties(CN_LEGEND)
+
+
+def render_health_radar(report, history_report=None):
+    """Render 5-axis health radar chart."""
+    categories = ['推力综合', '流量综合', '比冲综合', '三维一致性', '模型置信度']
+    scores = [
+        report['thrust']['dim_score'],
+        report['mfr']['dim_score'],
+        report['isp']['dim_score'],
+        report['consistency']['score'],
+        report['model_confidence']['score'],
+    ]
+
+    N = len(categories)
+    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+    angles_plot = angles + [angles[0]]
+    scores_plot = scores + [scores[0]]
+
+    fig, ax = plt.subplots(figsize=(6.2, 6.2), subplot_kw=dict(polar=True))
+    fig.patch.set_facecolor(BG_PANEL)
+    ax.set_facecolor(BG_PANEL)
+
+    ax.fill(angles_plot, scores_plot, color=DATA_CYAN, alpha=0.22)
+    ax.plot(angles_plot, scores_plot, color=DATA_CYAN, lw=2.8, marker='o',
+            markersize=9, markerfacecolor=DATA_CYAN, markeredgecolor='white',
+            markeredgewidth=1.5, label='当前评估')
+
+    if history_report is not None:
+        hist_scores = [
+            history_report.get('thrust_dim', 0),
+            history_report.get('mfr_dim', 0),
+            history_report.get('isp_dim', 0),
+            history_report.get('consistency', 0),
+            history_report.get('mc', 0),
+        ]
+        hist_plot = hist_scores + [hist_scores[0]]
+        ax.plot(angles_plot, hist_plot, color=DATA_AMBER, lw=1.5, ls='--',
+                marker='s', markersize=6, alpha=0.7, label='上次点火')
+
+    for ref, color, ls in [(70, NASA_RED, ':'), (90, DATA_GREEN, ':')]:
+        ax.plot(angles_plot, [ref] * len(angles_plot), color=color,
+                lw=0.8, ls=ls, alpha=0.35)
+
+    ax.set_xticks(angles)
+    ax.set_xticklabels(categories, fontproperties=CN_LABEL, color=TEXT_PRIMARY, size=11)
+    ax.set_ylim(0, 105)
+    ax.set_yticks([20, 40, 60, 80, 100])
+    ax.set_yticklabels(['20', '40', '60', '80', '100'],
+                       fontproperties=CN_TICK, color=TEXT_SECONDARY)
+    ax.tick_params(axis='y', colors=TEXT_SECONDARY)
+    ax.grid(color=GRID_LINE, alpha=0.4, lw=0.6)
+    for spine in ax.spines.values():
+        spine.set_edgecolor(BORDER)
+        spine.set_linewidth(1.2)
+    ax.legend(loc='upper right', bbox_to_anchor=(1.28, 1.08),
+              prop=CN_LEGEND, framealpha=0.9, edgecolor=BORDER)
+
+    return fig
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1152,56 +1212,87 @@ if uploaded_file is not None:
 
         overall = report['overall_health']
 
-        def _bar(s):
-            return f'<span class="score-bar"><span class="score-fill" style="width:{max(0,min(100,s))}%"></span></span>'
-        def _badge(lv):
-            cls = 'level-good' if lv in ('good','stable','nominal') else \
-                  'level-warning' if lv in ('warning','mild','partial','scattered') else \
-                  'level-critical'
-            return f'<span class="{cls}">● {lv.upper()}</span>'
-        def _drift_badge(lv):
-            if lv == 'stable': return '<span style="color:#2EE686;">▬ 稳定</span>'
-            if lv == 'mild': return '<span style="color:#FFC940;">↗ 轻微漂移</span>'
-            if lv == 'noticeable': return '<span style="color:#FF8A4D;">↗ 明显漂移</span>'
-            return '<span style="color:#FF4D2E;">↗ 严重漂移</span>'
+        # ── Save to history ──
+        hist_entry = {
+            'filename': fname,
+            'thrust_dim': report['thrust']['dim_score'],
+            'mfr_dim': report['mfr']['dim_score'],
+            'isp_dim': report['isp']['dim_score'],
+            'consistency': report['consistency']['score'],
+            'mc': report['model_confidence']['score'],
+        }
+        st.session_state.history_reports.append(hist_entry)
+        st.session_state.history_reports = st.session_state.history_reports[-10:]
 
-        dims = ['thrust', 'mfr', 'isp']
-        dim_labels_cn = ['推力', '质量流量', '比冲']
-        dim_units = ['N', 'mg/s', 's']
-
-        rows_html = ''
-        for d, cn, u in zip(dims, dim_labels_cn, dim_units):
-            dd = report[d]
-            rows_html += f"""
-            <tr>
-                <td><b>{cn}</b> <span style="font-size:10px;color:{TEXT_DIM};">{d.upper()}</span></td>
-                <td>RMS={dd['rms']:.4f} {u} | 异常 {dd['n_anomaly']}/{dd['total_steps']}步 ({dd['anomaly_ratio']*100:.1f}%)</td>
-                <td>{_bar(dd['accuracy'])} {dd['accuracy']}/100</td>
-                <td>{_badge(_health_level(dd['accuracy']))}</td>
-            </tr>
-            <tr>
-                <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 异常评分</span></td>
-                <td><span style="font-size:11px;color:{TEXT_DIM};">检测方法: {'3σ 统计' if has_mc else '硬阈值'} | 漂移: {_drift_badge(dd['drift_level'])}</span></td>
-                <td>{_bar(dd['anomaly'])} {dd['anomaly']}/100</td>
-                <td>{_badge(_health_level(dd['anomaly']))}</td>
-            </tr>
-            <tr>
-                <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 维度综合</span></td>
-                <td><span style="font-size:11px;color:{TEXT_DIM};">0.5×精度 + 0.5×异常</span></td>
-                <td><b>{_bar(dd['dim_score'])} {dd['dim_score']}/100</b></td>
-                <td>{_badge(_health_level(dd['dim_score']))}</td>
-            </tr>"""
-
-        cons = report['consistency']
-        mc = report['model_confidence']
-
-        report_html = f"""
-        <div class="report-card">
-            <div class="report-summary">
-                <span class="score">{overall}/100</span> 综合健康评分
-                &nbsp;&nbsp;<span style="color:{TEXT_DIM};font-weight:400;font-size:14px;">|</span>&nbsp;&nbsp;
-                <span style="color:{TEXT_PRIMARY};font-weight:600;font-size:15px;">{report['summary']}</span>
+        # ── Summary big number ──
+        lvl_cn = {'good': '正常', 'warning': '需关注', 'critical': '建议检修'}
+        lvl_color = {'good': DATA_GREEN, 'warning': DATA_AMBER, 'critical': NASA_RED}
+        st.markdown(f"""
+        <div class="report-card" style="text-align:center;margin-bottom:18px;">
+            <div style="font-size:60px;font-weight:800;font-family:'JetBrains Mono',monospace;
+                        color:{lvl_color.get(report['health_level'], DATA_CYAN)};line-height:1;">
+                {overall}<span style="font-size:24px;">/100</span>
             </div>
+            <div style="font-size:17px;color:{TEXT_PRIMARY};font-weight:600;margin-top:8px;">
+                {lvl_cn.get(report['health_level'], '未知')} · {report['summary']}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Radar chart ──
+        prev = st.session_state.history_reports[-2] if len(st.session_state.history_reports) > 1 else None
+        fig_radar = render_health_radar(report, history_report=prev)
+        col_radar, col_spacer = st.columns([3, 1])
+        with col_radar:
+            render_fig(fig_radar)
+
+        # ── Dimension details (expander) ──
+        with st.expander("查看维度详情 Dimension Details", expanded=False):
+            def _bar(s):
+                return f'<span class="score-bar"><span class="score-fill" style="width:{max(0,min(100,s))}%"></span></span>'
+            def _badge(lv):
+                cls = 'level-good' if lv in ('good','stable','nominal') else \
+                      'level-warning' if lv in ('warning','mild','partial','scattered') else \
+                      'level-critical'
+                return f'<span class="{cls}">● {lv.upper()}</span>'
+            def _drift_badge(lv):
+                if lv == 'stable': return '<span style="color:#2EE686;">▬ 稳定</span>'
+                if lv == 'mild': return '<span style="color:#FFC940;">↗ 轻微漂移</span>'
+                if lv == 'noticeable': return '<span style="color:#FF8A4D;">↗ 明显漂移</span>'
+                return '<span style="color:#FF4D2E;">↗ 严重漂移</span>'
+
+            dims = ['thrust', 'mfr', 'isp']
+            dim_labels_cn = ['推力', '质量流量', '比冲']
+            dim_units = ['N', 'mg/s', 's']
+
+            rows_html = ''
+            for d, cn, u in zip(dims, dim_labels_cn, dim_units):
+                dd = report[d]
+                rows_html += f"""
+                <tr>
+                    <td><b>{cn}</b> <span style="font-size:10px;color:{TEXT_DIM};">{d.upper()}</span></td>
+                    <td>RMS={dd['rms']:.4f} {u} | 异常 {dd['n_anomaly']}/{dd['total_steps']}步 ({dd['anomaly_ratio']*100:.1f}%)</td>
+                    <td>{_bar(dd['accuracy'])} {dd['accuracy']}/100</td>
+                    <td>{_badge(_health_level(dd['accuracy']))}</td>
+                </tr>
+                <tr>
+                    <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 异常评分</span></td>
+                    <td><span style="font-size:11px;color:{TEXT_DIM};">检测方法: {'3σ 统计' if has_mc else '硬阈值'} | 漂移: {_drift_badge(dd['drift_level'])}</span></td>
+                    <td>{_bar(dd['anomaly'])} {dd['anomaly']}/100</td>
+                    <td>{_badge(_health_level(dd['anomaly']))}</td>
+                </tr>
+                <tr>
+                    <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 维度综合</span></td>
+                    <td><span style="font-size:11px;color:{TEXT_DIM};">0.5×精度 + 0.5×异常</span></td>
+                    <td><b>{_bar(dd['dim_score'])} {dd['dim_score']}/100</b></td>
+                    <td>{_badge(_health_level(dd['dim_score']))}</td>
+                </tr>"""
+
+            cons = report['consistency']
+            mc = report['model_confidence']
+
+            st.html(f"""
+            <div style="background:{BG_PANEL};padding:16px 0;">
             <table class="report-table">
                 <thead>
                     <tr><th style="width:20%;">评估维度</th><th style="width:32%;">指标</th><th style="width:23%;">评分</th><th style="width:25%;">状态</th></tr>
@@ -1227,8 +1318,8 @@ if uploaded_file is not None:
                     </tr>
                 </tbody>
             </table>
-        </div>"""
-        st.html(report_html)
+            </div>
+            """)
 
         # ── 评分规则 (LaTeX) ──
         with st.expander("评分规则 Scoring Rules", expanded=False):
