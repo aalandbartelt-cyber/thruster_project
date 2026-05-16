@@ -1114,8 +1114,10 @@ if uploaded_file is not None:
     isp_is_anomaly = res.get('isp_is_anomaly', isp_residuals > threshold * ISP_THRESHOLD_SCALE)
     isp_anom_ratio = res.get('isp_anomaly_ratio', float(isp_is_anomaly.mean()))
 
-    # Combined anomaly ratio (any dimension)
-    combined_anom_mask = is_anomaly | mfr_is_anomaly | isp_is_anomaly
+    # Combined anomaly: require at least 2 of 3 dimensions (reduces false positives
+    # from independent single-dimension flags vs simple OR)
+    _anom_int = is_anomaly.astype(int) + mfr_is_anomaly.astype(int) + isp_is_anomaly.astype(int)
+    combined_anom_mask = _anom_int >= 2
     combined_anom_ratio = float(combined_anom_mask.mean())
 
     is_tuned_model = (model_label != 'GLOBAL')
@@ -1206,15 +1208,15 @@ if uploaded_file is not None:
     if has_mc:
         from inference_utils import (THRUST_NOISE_STD as _TNS, MFR_NOISE_STD as _MNS,
                                       ISP_NOISE_STD as _INS, REF_RMSE_THRUST, REF_RMSE_MFR)
-        _rt = 0.10  # 10% relative tolerance
-        _ts = np.sqrt(_t_std**2 + _TNS**2 + (2*REF_RMSE_THRUST)**2 + (_rt*np.abs(thrust_pred))**2) * 3.0
-        _ms = np.sqrt(_m_std**2 + _MNS**2 + (2*REF_RMSE_MFR)**2 + (_rt*np.abs(mfr_pred))**2) * 3.0
+        _rt = 0.15  # 15% relative tolerance
+        _ts = np.sqrt(_t_std**2 + _TNS**2 + (3*REF_RMSE_THRUST)**2 + (_rt*np.abs(thrust_pred))**2) * 3.0
+        _ms = np.sqrt(_m_std**2 + _MNS**2 + (3*REF_RMSE_MFR)**2 + (_rt*np.abs(mfr_pred))**2) * 3.0
         # Dynamic Isp reference RMSE via error propagation
         _C = 1e-6 * G0
         _dT = 1.0 / (np.mean(mfr_pred) * _C + EPS)
         _dM = np.mean(thrust_pred) / (np.mean(mfr_pred)**2 * _C + EPS)
         _ref_isp = np.sqrt((_dT * REF_RMSE_THRUST)**2 + (_dM * REF_RMSE_MFR)**2)
-        _is = np.sqrt(_i_std**2 + _INS**2 + (2*_ref_isp)**2 + (_rt*np.abs(isp))**2) * 3.0
+        _is = np.sqrt(_i_std**2 + _INS**2 + (3*_ref_isp)**2 + (_rt*np.abs(isp))**2) * 3.0
         thr_label_t = '3σ 动态阈值'
         thr_label_m = '3σ 动态阈值'
         thr_label_i = '3σ 动态阈值'
