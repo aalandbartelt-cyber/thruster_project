@@ -922,15 +922,13 @@ def telemetry_card(label_cn, label_en, value, unit="", status="nominal", delta_t
     if delta_text is not None:
         cls = "delta-good" if status == "nominal" else "delta-bad"
         delta_html = f'<div class="telemetry-delta {cls}">{delta_text}</div>'
-    st.markdown(f"""
-    <div class="telemetry-card card-{status}">
+    st.html(f"""<div class="telemetry-card card-{status}">
         <div class="telemetry-label-cn">{label_cn}</div>
         <div class="telemetry-label-en">{label_en}</div>
         <div class="telemetry-value">{value}<span class="telemetry-unit">{unit}</span></div>
         {spark_html}
         {delta_html}
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""")
 
 
 def section_header(cn, en):
