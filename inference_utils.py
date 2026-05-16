@@ -374,9 +374,9 @@ def compute_residuals(pred_thrust, actual_thrust, threshold=0.6,
 
     if pred_isp is not None and actual_isp is not None:
         if has_uncertainty and isp_std is not None:
-            # Dynamic Isp reference RMSE via error propagation
-            _tm = float(np.mean(pred_thrust))
-            _mm = float(np.mean(pred_mfr))
+            # Dynamic Isp reference RMSE — use ACTUAL operating point
+            _tm = float(np.mean(actual_thrust))
+            _mm = float(np.mean(actual_mfr))
             _C = 1e-6 * G0
             _dT = 1.0 / (_mm * _C + EPS)
             _dM = _tm / (_mm**2 * _C + EPS)
@@ -466,9 +466,11 @@ def generate_health_report(thrust_pred, mfr_pred, isp_pred,
     seq_len = len(thrust_pred)
     has_uncertainty = (thrust_std is not None)
 
-    # --- Reference RMS (Isp computed via error propagation at data mean) ---
-    t_mean = float(np.mean(thrust_pred))
-    m_mean = float(np.mean(mfr_pred))
+    # --- Reference RMS (Isp computed via error propagation at ACTUAL data mean) ---
+    # Use actual (not predicted) values — when the model is systematically off,
+    # the predicted operating point gives misleadingly tight reference RMSE.
+    t_mean = float(np.mean(thrust_actual))
+    m_mean = float(np.mean(mfr_actual))
     C = 1e-6 * G0
     dIsp_dT = 1.0 / (m_mean * C + EPS)
     dIsp_dM = t_mean / (m_mean**2 * C + EPS)  # abs value

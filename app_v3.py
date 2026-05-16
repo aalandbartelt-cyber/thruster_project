@@ -1211,10 +1211,10 @@ if uploaded_file is not None:
         _rt = 0.15  # 15% relative tolerance
         _ts = np.sqrt(_t_std**2 + _TNS**2 + (3*REF_RMSE_THRUST)**2 + (_rt*np.abs(thrust_pred))**2) * 3.0
         _ms = np.sqrt(_m_std**2 + _MNS**2 + (3*REF_RMSE_MFR)**2 + (_rt*np.abs(mfr_pred))**2) * 3.0
-        # Dynamic Isp reference RMSE via error propagation
+        # Dynamic Isp reference RMSE — use ACTUAL operating point
         _C = 1e-6 * G0
-        _dT = 1.0 / (np.mean(mfr_pred) * _C + EPS)
-        _dM = np.mean(thrust_pred) / (np.mean(mfr_pred)**2 * _C + EPS)
+        _dT = 1.0 / (np.mean(actual_mfr) * _C + EPS)
+        _dM = np.mean(actual_thrust) / (np.mean(actual_mfr)**2 * _C + EPS)
         _ref_isp = np.sqrt((_dT * REF_RMSE_THRUST)**2 + (_dM * REF_RMSE_MFR)**2)
         _is = np.sqrt(_i_std**2 + _INS**2 + (3*_ref_isp)**2 + (_rt*np.abs(isp))**2) * 3.0
         thr_label_t = '3σ 动态阈值'
