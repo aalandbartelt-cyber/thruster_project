@@ -23,8 +23,10 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def compute_isp(thrust, mfr):
-    """比冲 Isp = thrust / (mfr * G0)，mfr 单位为 mg/s，thrust 为 N"""
-    return thrust / (mfr * MG_PER_S_TO_KG_PER_S * G0 + EPS)
+    """比冲 Isp = thrust / (mfr * G0)，mfr 单位为 mg/s，thrust 为 N.
+    Clipped to [1, 5000] s to prevent numerical explosion when MFR ≈ 0."""
+    raw = thrust / (mfr * MG_PER_S_TO_KG_PER_S * G0 + EPS)
+    return np.clip(raw, 1.0, 5000.0)
 
 
 # ═══════════════════════════════════════════
