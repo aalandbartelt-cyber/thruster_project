@@ -1200,52 +1200,7 @@ if uploaded_file is not None:
     _tanom = is_anomaly[_sl]
     _manom = mfr_is_anomaly[_sl]
     _ianom = isp_is_anomaly[_sl]
-    _ts_v = _ts[_sl] if _ts.ndim > 0 else _ts
-    _ms_v = _ms[_sl] if _ms.ndim > 0 else _ms
-    _is_v = _is[_sl] if _is.ndim > 0 else _is
-
-    # 4 个标签页
-    tab_telem, tab_anom, tab_report, tab_shap = st.tabs([
-        "实时遥测",
-        "异常检测",
-        "健康报告",
-        "SHAP 归因",
-    ])
-
-    # ═══════════════════ 标签页 1：实时遥测 ═══════════════════
-    with tab_telem:
-        section_header("实时遥测曲线", "REAL-TIME TELEMETRY")
-
-    fig_tel, axes_tel = plt.subplots(1, 3, figsize=(18, 5.4))
-    for ax, actual, pred, amask, title, ylabel in [
-        (axes_tel[0], _at, _tp, _tanom,
-         '推力 · THRUST', '推力 (N)'),
-        (axes_tel[1], _am, _mp, _manom,
-         '质量流量 · MASS FLOW RATE', '流量 (mg/s)'),
-        (axes_tel[2], _ai, _ip, _ianom,
-         '比冲 · SPECIFIC IMPULSE', '比冲 (s)'),
-    ]:
-        max_val = max(np.max(actual), np.max(pred))
-        if amask is not None and amask.any():
-            ax.fill_between(t_axis_view, 0, max_val * 1.18,
-                            where=amask, color=NASA_RED, alpha=0.2,
-                            label='异常区间 (3σ)')
-        ax.plot(t_axis_view, actual, color=DATA_CYAN,  lw=2.0, label='传感器实测')
-        ax.plot(t_axis_view, pred,   color=DATA_AMBER, lw=1.4, ls='--', label='AI 预测基准')
-        if ax is axes_tel[2]:
-            ax.axhline(np.mean(pred), color=DATA_AMBER, ls=':', lw=1.2, alpha=0.5,
-                       label=f'预测均值 {np.mean(pred):.0f} s')
-        ax.legend(loc='upper right')
-        ax.grid(True, axis='y')
-        apply_cn_to_axis(ax, title=title, xlabel='时间步 (0.01s)', ylabel=ylabel)
-    plt.tight_layout(pad=2.0)
-    render_fig(fig_tel)
-
-    # ═══════════════════ 标签页 2：异常检测 ═══════════════════
-    with tab_anom:
-        section_header("异常检测与残差监控", "ANOMALY DETECTION")
-
-    # Dynamic thresholds: show sigma-based when available, fallback to hard threshold
+    # Dynamic thresholds (must be computed before view slicing)
     if has_mc:
         from inference_utils import THRUST_NOISE_STD as _TNS, MFR_NOISE_STD as _MNS, ISP_NOISE_STD as _INS
         _ts = np.sqrt(_t_std**2 + _TNS**2) * 3.0
@@ -1268,93 +1223,138 @@ if uploaded_file is not None:
         thr_line_m = NASA_RED
         thr_line_i = NASA_RED
 
-    # ── 2+1 残差布局 + 三维关联热力图 ──
-    fig2 = plt.figure(figsize=(18, 9.5))
-    gs = fig2.add_gridspec(3, 2, height_ratios=[1, 1, 0.55], hspace=0.45, wspace=0.28)
-    ax_t = fig2.add_subplot(gs[0, 0])
-    ax_m = fig2.add_subplot(gs[0, 1])
-    ax_i = fig2.add_subplot(gs[1, :])
-    ax_heat = fig2.add_subplot(gs[2, :])
+    _ts_v = _ts[_sl] if _ts.ndim > 0 else _ts
+    _ms_v = _ms[_sl] if _ms.ndim > 0 else _ms
+    _is_v = _is[_sl] if _is.ndim > 0 else _is
 
-    # Thrust residual (top-left)
-    ax_t.plot(t_axis_view, _res, color=STATUS_WARN, lw=1.5)
-    if _ts_v.ndim == 0 or (_ts_v.ndim > 0 and _ts_v.std() < 1e-6):
-        ax_t.axhline(_ts_v[0] if _ts_v.ndim > 0 else _ts_v, color=thr_line_t, ls='--', lw=1.2, label=thr_label_t)
-    else:
-        ax_t.plot(t_axis_view, _ts_v, color=thr_line_t, ls='--', lw=1.2, alpha=0.8, label=thr_label_t)
-    if _tanom.any():
-        ax_t.fill_between(t_axis_view, 0, _res, where=_tanom, color=NASA_RED, alpha=0.3)
-    ax_t.legend(loc='upper right', fontsize=7)
-    ax_t.grid(True, axis='y', alpha=0.3)
-    apply_cn_to_axis(ax_t, title='推力残差 · THRUST', ylabel='残差 (N)')
-
-    # MFR residual (top-right)
-    ax_m.plot(t_axis_view, _mres, color=DATA_CYAN, lw=1.5)
-    if _ms_v.ndim == 0 or (_ms_v.ndim > 0 and _ms_v.std() < 1e-6):
-        ax_m.axhline(_ms_v[0] if _ms_v.ndim > 0 else _ms_v, color=thr_line_m, ls='--', lw=1.2, label=thr_label_m)
-    else:
-        ax_m.plot(t_axis_view, _ms_v, color=thr_line_m, ls='--', lw=1.2, alpha=0.8, label=thr_label_m)
-    if _manom.any():
-        ax_m.fill_between(t_axis_view, 0, _mres, where=_manom, color=NASA_RED, alpha=0.3)
-    ax_m.legend(loc='upper right', fontsize=7)
-    ax_m.grid(True, axis='y', alpha=0.3)
-    apply_cn_to_axis(ax_m, title='质量流量残差 · MASS FLOW RATE', ylabel='残差 (mg/s)')
-
-    # Isp residual (bottom row, full width)
-    ax_i.plot(t_axis_view, _ires, color=DATA_VIOLET, lw=1.5)
-    if _is_v.ndim == 0 or (_is_v.ndim > 0 and _is_v.std() < 1e-6):
-        ax_i.axhline(_is_v[0] if _is_v.ndim > 0 else _is_v, color=thr_line_i, ls='--', lw=1.2, label=thr_label_i)
-    else:
-        ax_i.plot(t_axis_view, _is_v, color=thr_line_i, ls='--', lw=1.2, alpha=0.8, label=thr_label_i)
-    if _ianom.any():
-        ax_i.fill_between(t_axis_view, 0, _ires, where=_ianom, color=NASA_RED, alpha=0.3)
-    ax_i.legend(loc='upper right', fontsize=7)
-    ax_i.grid(True, axis='y', alpha=0.3)
-    apply_cn_to_axis(ax_i, title='比冲残差 · SPECIFIC IMPULSE', ylabel='残差 (s)', xlabel='时间步 (0.01s)')
-
-    # 3D anomaly correlation heatmap
-    heat_data = np.stack([
-        np.clip(_res / (_ts_v + EPS), 0, 3),
-        np.clip(_mres / (_ms_v + EPS), 0, 3),
-        np.clip(_ires / (_is_v + EPS), 0, 3),
+    # 4 个标签页
+    tab_telem, tab_anom, tab_report, tab_shap = st.tabs([
+        "实时遥测",
+        "异常检测",
+        "健康报告",
+        "SHAP 归因",
     ])
-    view_len = t1 - t0
-    im = ax_heat.imshow(heat_data, aspect='auto', cmap='RdYlGn_r',
-                        vmin=0, vmax=3, extent=[t0, t1, 0, 3])
-    ax_heat.set_yticks([0.5, 1.5, 2.5])
-    ax_heat.set_yticklabels(['比冲', '流量', '推力'], fontproperties=CN_TICK)
-    ax_heat.tick_params(axis='y', colors=TEXT_PRIMARY)
-    ax_heat.tick_params(axis='x', colors=TEXT_SECONDARY)
-    cbar = plt.colorbar(im, ax=ax_heat, orientation='horizontal', pad=0.18, shrink=0.5)
-    cbar.set_label('残差/阈值 比值', fontproperties=CN_LABEL, color=TEXT_PRIMARY)
-    cbar.ax.tick_params(colors=TEXT_SECONDARY)
-    apply_cn_to_axis(ax_heat, title='三维异常关联热力图', xlabel='时间步 (0.01s)')
-    plt.tight_layout(pad=2.0)
-    render_fig(fig2)
 
-    # ── 三维异常状态 ──
-    any_anom = is_anomaly.any() or mfr_is_anomaly.any() or isp_is_anomaly.any()
+    # ═══════════════════ 标签页 1：实时遥测 ═══════════════════
+    with tab_telem:
+        section_header("实时遥测曲线", "REAL-TIME TELEMETRY")
 
-    if any_anom:
-        _parts = []
-        if is_anomaly.any():     _parts.append(f'推力 {int(is_anomaly.sum())}步')
-        if mfr_is_anomaly.any(): _parts.append(f'流量 {int(mfr_is_anomaly.sum())}步')
-        if isp_is_anomaly.any(): _parts.append(f'比冲 {int(isp_is_anomaly.sum())}步')
-        det_method = '3σ 统计检测' if has_mc else f'硬阈值 ({threshold} N)'
-        st.markdown(f"""
-        <div class="status-bar alert">
-            <span class="title">▲ 检测到异常</span>
-            {' / '.join(_parts)} 超过阈值 &nbsp;|&nbsp; 检测方法: {det_method}
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        det_method = '3σ 统计检测' if has_mc else f'硬阈值 ({threshold} N)'
-        st.markdown(f"""
-        <div class="status-bar nominal">
-            <span class="title">● 系统运行正常</span>
-            推力 · 流量 · 比冲 三维残差均在阈值范围内 &nbsp;|&nbsp; 检测方法: {det_method}
-        </div>
-        """, unsafe_allow_html=True)
+        fig_tel, axes_tel = plt.subplots(1, 3, figsize=(18, 5.4))
+        for ax, actual, pred, amask, title, ylabel in [
+            (axes_tel[0], _at, _tp, _tanom,
+             '推力 · THRUST', '推力 (N)'),
+            (axes_tel[1], _am, _mp, _manom,
+             '质量流量 · MASS FLOW RATE', '流量 (mg/s)'),
+            (axes_tel[2], _ai, _ip, _ianom,
+             '比冲 · SPECIFIC IMPULSE', '比冲 (s)'),
+        ]:
+            max_val = max(np.max(actual), np.max(pred))
+            if amask is not None and amask.any():
+                ax.fill_between(t_axis_view, 0, max_val * 1.18,
+                                where=amask, color=NASA_RED, alpha=0.2,
+                                label='异常区间 (3σ)')
+            ax.plot(t_axis_view, actual, color=DATA_CYAN,  lw=2.0, label='传感器实测')
+            ax.plot(t_axis_view, pred,   color=DATA_AMBER, lw=1.4, ls='--', label='AI 预测基准')
+            if ax is axes_tel[2]:
+                ax.axhline(np.mean(pred), color=DATA_AMBER, ls=':', lw=1.2, alpha=0.5,
+                           label=f'预测均值 {np.mean(pred):.0f} s')
+            ax.legend(loc='upper right')
+            ax.grid(True, axis='y')
+            apply_cn_to_axis(ax, title=title, xlabel='时间步 (0.01s)', ylabel=ylabel)
+        plt.tight_layout(pad=2.0)
+        render_fig(fig_tel)
+
+    # ═══════════════════ 标签页 2：异常检测 ═══════════════════
+    with tab_anom:
+        section_header("异常检测与残差监控", "ANOMALY DETECTION")
+
+        # ── 2+1 残差布局 + 三维关联热力图 ──
+        fig2 = plt.figure(figsize=(18, 9.5))
+        gs = fig2.add_gridspec(3, 2, height_ratios=[1, 1, 0.55], hspace=0.45, wspace=0.28)
+        ax_t = fig2.add_subplot(gs[0, 0])
+        ax_m = fig2.add_subplot(gs[0, 1])
+        ax_i = fig2.add_subplot(gs[1, :])
+        ax_heat = fig2.add_subplot(gs[2, :])
+
+        # Thrust residual (top-left)
+        ax_t.plot(t_axis_view, _res, color=STATUS_WARN, lw=1.5)
+        if _ts_v.ndim == 0 or (_ts_v.ndim > 0 and _ts_v.std() < 1e-6):
+            ax_t.axhline(_ts_v[0] if _ts_v.ndim > 0 else _ts_v, color=thr_line_t, ls='--', lw=1.2, label=thr_label_t)
+        else:
+            ax_t.plot(t_axis_view, _ts_v, color=thr_line_t, ls='--', lw=1.2, alpha=0.8, label=thr_label_t)
+        if _tanom.any():
+            ax_t.fill_between(t_axis_view, 0, _res, where=_tanom, color=NASA_RED, alpha=0.3)
+        ax_t.legend(loc='upper right', fontsize=7)
+        ax_t.grid(True, axis='y', alpha=0.3)
+        apply_cn_to_axis(ax_t, title='推力残差 · THRUST', ylabel='残差 (N)')
+
+        # MFR residual (top-right)
+        ax_m.plot(t_axis_view, _mres, color=DATA_CYAN, lw=1.5)
+        if _ms_v.ndim == 0 or (_ms_v.ndim > 0 and _ms_v.std() < 1e-6):
+            ax_m.axhline(_ms_v[0] if _ms_v.ndim > 0 else _ms_v, color=thr_line_m, ls='--', lw=1.2, label=thr_label_m)
+        else:
+            ax_m.plot(t_axis_view, _ms_v, color=thr_line_m, ls='--', lw=1.2, alpha=0.8, label=thr_label_m)
+        if _manom.any():
+            ax_m.fill_between(t_axis_view, 0, _mres, where=_manom, color=NASA_RED, alpha=0.3)
+        ax_m.legend(loc='upper right', fontsize=7)
+        ax_m.grid(True, axis='y', alpha=0.3)
+        apply_cn_to_axis(ax_m, title='质量流量残差 · MASS FLOW RATE', ylabel='残差 (mg/s)')
+
+        # Isp residual (bottom row, full width)
+        ax_i.plot(t_axis_view, _ires, color=DATA_VIOLET, lw=1.5)
+        if _is_v.ndim == 0 or (_is_v.ndim > 0 and _is_v.std() < 1e-6):
+            ax_i.axhline(_is_v[0] if _is_v.ndim > 0 else _is_v, color=thr_line_i, ls='--', lw=1.2, label=thr_label_i)
+        else:
+            ax_i.plot(t_axis_view, _is_v, color=thr_line_i, ls='--', lw=1.2, alpha=0.8, label=thr_label_i)
+        if _ianom.any():
+            ax_i.fill_between(t_axis_view, 0, _ires, where=_ianom, color=NASA_RED, alpha=0.3)
+        ax_i.legend(loc='upper right', fontsize=7)
+        ax_i.grid(True, axis='y', alpha=0.3)
+        apply_cn_to_axis(ax_i, title='比冲残差 · SPECIFIC IMPULSE', ylabel='残差 (s)', xlabel='时间步 (0.01s)')
+
+        # 3D anomaly correlation heatmap
+        heat_data = np.stack([
+            np.clip(_res / (_ts_v + EPS), 0, 3),
+            np.clip(_mres / (_ms_v + EPS), 0, 3),
+            np.clip(_ires / (_is_v + EPS), 0, 3),
+        ])
+        view_len = t1 - t0
+        im = ax_heat.imshow(heat_data, aspect='auto', cmap='RdYlGn_r',
+                            vmin=0, vmax=3, extent=[t0, t1, 0, 3])
+        ax_heat.set_yticks([0.5, 1.5, 2.5])
+        ax_heat.set_yticklabels(['比冲', '流量', '推力'], fontproperties=CN_TICK)
+        ax_heat.tick_params(axis='y', colors=TEXT_PRIMARY)
+        ax_heat.tick_params(axis='x', colors=TEXT_SECONDARY)
+        cbar = plt.colorbar(im, ax=ax_heat, orientation='horizontal', pad=0.18, shrink=0.5)
+        cbar.set_label('残差/阈值 比值', fontproperties=CN_LABEL, color=TEXT_PRIMARY)
+        cbar.ax.tick_params(colors=TEXT_SECONDARY)
+        apply_cn_to_axis(ax_heat, title='三维异常关联热力图', xlabel='时间步 (0.01s)')
+        plt.tight_layout(pad=2.0)
+        render_fig(fig2)
+
+        # ── 三维异常状态 ──
+        any_anom = is_anomaly.any() or mfr_is_anomaly.any() or isp_is_anomaly.any()
+
+        if any_anom:
+            _parts = []
+            if is_anomaly.any():     _parts.append(f'推力 {int(is_anomaly.sum())}步')
+            if mfr_is_anomaly.any(): _parts.append(f'流量 {int(mfr_is_anomaly.sum())}步')
+            if isp_is_anomaly.any(): _parts.append(f'比冲 {int(isp_is_anomaly.sum())}步')
+            det_method = '3σ 统计检测' if has_mc else f'硬阈值 ({threshold} N)'
+            st.markdown(f"""
+            <div class="status-bar alert">
+                <span class="title">▲ 检测到异常</span>
+                {' / '.join(_parts)} 超过阈值 &nbsp;|&nbsp; 检测方法: {det_method}
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            det_method = '3σ 统计检测' if has_mc else f'硬阈值 ({threshold} N)'
+            st.markdown(f"""
+            <div class="status-bar nominal">
+                <span class="title">● 系统运行正常</span>
+                推力 · 流量 · 比冲 三维残差均在阈值范围内 &nbsp;|&nbsp; 检测方法: {det_method}
+            </div>
+            """, unsafe_allow_html=True)
 
     # ═══════════════════ 标签页 3：健康报告 ═══════════════════
     with tab_report:
