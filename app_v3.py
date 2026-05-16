@@ -1206,14 +1206,14 @@ if uploaded_file is not None:
     if has_mc:
         from inference_utils import (THRUST_NOISE_STD as _TNS, MFR_NOISE_STD as _MNS,
                                       ISP_NOISE_STD as _INS, REF_RMSE_THRUST, REF_RMSE_MFR)
-        _ts = np.sqrt(_t_std**2 + _TNS**2 + (REF_RMSE_THRUST / 3.0)**2) * 3.0
-        _ms = np.sqrt(_m_std**2 + _MNS**2 + (REF_RMSE_MFR / 3.0)**2) * 3.0
+        _ts = np.sqrt(_t_std**2 + _TNS**2 + REF_RMSE_THRUST**2) * 3.0
+        _ms = np.sqrt(_m_std**2 + _MNS**2 + REF_RMSE_MFR**2) * 3.0
         # Dynamic Isp reference RMSE via error propagation
         _C = 1e-6 * G0
         _dT = 1.0 / (np.mean(mfr_pred) * _C + EPS)
         _dM = np.mean(thrust_pred) / (np.mean(mfr_pred)**2 * _C + EPS)
         _ref_isp = np.sqrt((_dT * REF_RMSE_THRUST)**2 + (_dM * REF_RMSE_MFR)**2)
-        _is = np.sqrt(_i_std**2 + _INS**2 + (_ref_isp / 3.0)**2) * 3.0
+        _is = np.sqrt(_i_std**2 + _INS**2 + _ref_isp**2) * 3.0
         thr_label_t = '3σ 动态阈值'
         thr_label_m = '3σ 动态阈值'
         thr_label_i = '3σ 动态阈值'

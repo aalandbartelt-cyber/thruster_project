@@ -248,14 +248,15 @@ REF_RMSE_MFR    = 20.8     # mg/s
 
 
 def _sigma_anomaly_mask(pred, actual, mc_std, noise_std, k=3.0, ref_rmse=None):
-    """Sigma-based anomaly detection: |pred - actual| > k * sqrt(mc_std^2 + noise_std^2 + (ref_rmse/k)^2).
+    """Sigma-based anomaly detection: |pred - actual| > k * sqrt(mc_std^2 + noise_std^2 + ref_rmse^2).
 
-    The ref_rmse term floors sigma at the model's known average error, preventing
-    unrealistically tight thresholds when MC uncertainty is very low.
+    The ref_rmse term floors sigma at the model's known average error, so the
+    threshold k*sigma >= k*ref_rmse — only flagging points k times worse than
+    the model's typical performance.
     """
     _var = mc_std ** 2 + noise_std ** 2
     if ref_rmse is not None:
-        _var = _var + (ref_rmse / k) ** 2
+        _var = _var + ref_rmse ** 2
     sigma = np.sqrt(_var)
     z_score = np.abs(pred - actual) / (sigma + EPS)
     return z_score > k, z_score
