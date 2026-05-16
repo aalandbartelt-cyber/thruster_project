@@ -1171,8 +1171,12 @@ if uploaded_file is not None:
                              sparkline_data=actual_mfr)
     with c3: telemetry_card("平均比冲",   "SPECIFIC IMPULSE", f"{mean_isp:.1f}",          " s",    "nominal",
                              sparkline_data=isp)
+    # Rolling-window anomaly ratio for trend sparkline (window=20)
+    _anom_win = 20
+    _anom_kernel = np.ones(_anom_win) / _anom_win
+    _rolling_anom = np.convolve(combined_anom_mask.astype(float), _anom_kernel, mode='same')
     with c4: telemetry_card("异常占比(3D)","ANOMALY RATIO 3D", f"{combined_anom_ratio*100:.2f}", " %",    anom_status, anom_delta,
-                             sparkline_data=combined_anom_mask.astype(float))
+                             sparkline_data=_rolling_anom)
 
     if is_tuned_model:
         st.markdown(f"""
@@ -1202,10 +1206,16 @@ if uploaded_file is not None:
     _ianom = isp_is_anomaly[_sl]
     # Dynamic thresholds (must be computed before view slicing)
     if has_mc:
-        from inference_utils import THRUST_NOISE_STD as _TNS, MFR_NOISE_STD as _MNS, ISP_NOISE_STD as _INS
-        _ts = np.sqrt(_t_std**2 + _TNS**2) * 3.0
-        _ms = np.sqrt(_m_std**2 + _MNS**2) * 3.0
-        _is = np.sqrt(_i_std**2 + _INS**2) * 3.0
+        from inference_utils import (THRUST_NOISE_STD as _TNS, MFR_NOISE_STD as _MNS,
+                                      ISP_NOISE_STD as _INS, REF_RMSE_THRUST, REF_RMSE_MFR)
+        _ts = np.sqrt(_t_std**2 + _TNS**2 + (REF_RMSE_THRUST / 3.0)**2) * 3.0
+        _ms = np.sqrt(_m_std**2 + _MNS**2 + (REF_RMSE_MFR / 3.0)**2) * 3.0
+        # Dynamic Isp reference RMSE via error propagation
+        _C = 1e-6 * G0
+        _dT = 1.0 / (np.mean(mfr_pred) * _C + EPS)
+        _dM = np.mean(thrust_pred) / (np.mean(mfr_pred)**2 * _C + EPS)
+        _ref_isp = np.sqrt((_dT * REF_RMSE_THRUST)**2 + (_dM * REF_RMSE_MFR)**2)
+        _is = np.sqrt(_i_std**2 + _INS**2 + (_ref_isp / 3.0)**2) * 3.0
         thr_label_t = '3σ 动态阈值'
         thr_label_m = '3σ 动态阈值'
         thr_label_i = '3σ 动态阈值'

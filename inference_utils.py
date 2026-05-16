@@ -247,9 +247,16 @@ REF_RMSE_MFR    = 20.8     # mg/s
 # REF_RMSE_ISP computed dynamically via error propagation at data mean operating point
 
 
-def _sigma_anomaly_mask(pred, actual, mc_std, noise_std, k=3.0):
-    """Sigma-based anomaly detection: |pred - actual| > k * sqrt(mc_std^2 + noise_std^2)."""
-    sigma = np.sqrt(mc_std ** 2 + noise_std ** 2)
+def _sigma_anomaly_mask(pred, actual, mc_std, noise_std, k=3.0, ref_rmse=None):
+    """Sigma-based anomaly detection: |pred - actual| > k * sqrt(mc_std^2 + noise_std^2 + (ref_rmse/k)^2).
+
+    The ref_rmse term floors sigma at the model's known average error, preventing
+    unrealistically tight thresholds when MC uncertainty is very low.
+    """
+    _var = mc_std ** 2 + noise_std ** 2
+    if ref_rmse is not None:
+        _var = _var + (ref_rmse / k) ** 2
+    sigma = np.sqrt(_var)
     z_score = np.abs(pred - actual) / (sigma + EPS)
     return z_score > k, z_score
 
@@ -336,7 +343,8 @@ def compute_residuals(pred_thrust, actual_thrust, threshold=0.6,
 
     if has_uncertainty:
         t_mask, t_z = _sigma_anomaly_mask(pred_thrust, actual_thrust,
-                                           thrust_std, THRUST_NOISE_STD)
+                                           thrust_std, THRUST_NOISE_STD,
+                                           ref_rmse=REF_RMSE_THRUST)
     else:
         t_res = np.abs(pred_thrust - actual_thrust)
         t_mask = t_res > threshold
@@ -350,7 +358,8 @@ def compute_residuals(pred_thrust, actual_thrust, threshold=0.6,
     if pred_mfr is not None and actual_mfr is not None:
         if has_uncertainty and mfr_std is not None:
             m_mask, _ = _sigma_anomaly_mask(pred_mfr, actual_mfr,
-                                             mfr_std, MFR_NOISE_STD)
+                                             mfr_std, MFR_NOISE_STD,
+                                             ref_rmse=REF_RMSE_MFR)
         else:
             m_res = np.abs(pred_mfr - actual_mfr)
             mfr_thr = threshold * (2000.0 / 8.0)  # scale proportional to MFR_MAX/THRUST_SCALE
@@ -361,9 +370,16 @@ def compute_residuals(pred_thrust, actual_thrust, threshold=0.6,
 
     if pred_isp is not None and actual_isp is not None:
         if has_uncertainty and isp_std is not None:
-            isp_noise = ISP_NOISE_STD
+            # Dynamic Isp reference RMSE via error propagation
+            _tm = float(np.mean(pred_thrust))
+            _mm = float(np.mean(pred_mfr))
+            _C = 1e-6 * G0
+            _dT = 1.0 / (_mm * _C + EPS)
+            _dM = _tm / (_mm**2 * _C + EPS)
+            _ref_isp = np.sqrt((_dT * REF_RMSE_THRUST)**2 + (_dM * REF_RMSE_MFR)**2)
             i_mask, _ = _sigma_anomaly_mask(pred_isp, actual_isp,
-                                             isp_std, isp_noise)
+                                             isp_std, ISP_NOISE_STD,
+                                             ref_rmse=_ref_isp)
         else:
             i_res = np.abs(pred_isp - actual_isp)
             i_mask = i_res > threshold * 50
@@ -484,7 +500,8 @@ def generate_health_report(thrust_pred, mfr_pred, isp_pred,
 
         # Anomaly detection
         if has_uncertainty and std is not None:
-            mask, z_score = _sigma_anomaly_mask(pred, actual, std, noise_stds[dim_name])
+            mask, z_score = _sigma_anomaly_mask(pred, actual, std, noise_stds[dim_name],
+                                                 ref_rmse=refs[dim_name])
         else:
             mask = residuals > 0.25  # fallback
         anom_ratio = float(mask.mean())
