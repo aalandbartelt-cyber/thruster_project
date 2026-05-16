@@ -653,29 +653,30 @@ section[data-testid="stSidebar"] {{
 # 四、Mission Header
 # ════════════════════════════════════════════════════════════════════
 
-st.markdown(f"""
-<div class="mission-header">
-    <div class="mission-badge">
-        <div class="b1">SHU</div>
-        <div class="b2">CRAIC·26</div>
-    </div>
-    <div class="mission-title-block">
-        <div class="mission-title-en">MONOPROPELLANT THRUSTER DIGITAL TWIN</div>
-        <div class="mission-title-cn">航天单组元推进器数字孪生健康监测系统</div>
-        <div class="mission-subtitle">
-            基于多源动态特征与多目标耦合预测
-            <span class="sep">·</span>
-            上海大学
-            <span class="sep">·</span>
-            <span class="en-tag">CRAIC 2026 · v3.0 ATTN-LSTM</span>
+def render_mission_header(status_cls="", status_text="正常运行"):
+    st.markdown(f"""
+    <div class="mission-header">
+        <div class="mission-badge">
+            <div class="b1">SHU</div>
+            <div class="b2">CRAIC·26</div>
+        </div>
+        <div class="mission-title-block">
+            <div class="mission-title-en">MONOPROPELLANT THRUSTER DIGITAL TWIN</div>
+            <div class="mission-title-cn">航天单组元推进器数字孪生健康监测系统</div>
+            <div class="mission-subtitle">
+                基于多源动态特征与多目标耦合预测
+                <span class="sep">·</span>
+                上海大学
+                <span class="sep">·</span>
+                <span class="en-tag">CRAIC 2026 · v3.0 ATTN-LSTM</span>
+            </div>
+        </div>
+        <div class="mission-status {status_cls}">
+            <span class="en">SYSTEM STATUS</span>
+            <span class="dot"></span>{status_text}
         </div>
     </div>
-    <div class="mission-status">
-        <span class="en">SYSTEM STATUS</span>
-        <span class="dot"></span>正常运行
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -816,6 +817,23 @@ with st.sidebar:
     <div style="font-size:13px;color:{TEXT_SECONDARY};margin-top:-8px;">
         当前阈值 &nbsp;━━&nbsp; <span style="color:{DATA_CYAN};font-weight:700;
         font-family:'JetBrains Mono',monospace;font-size:15px;">{threshold:.1f} N</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="sidebar-section-title">时间窗口</div>
+    <div class="sidebar-section-en">TIME WINDOW</div>
+    """, unsafe_allow_html=True)
+    time_range = st.slider(
+        "time_range",
+        min_value=0, max_value=SEQ_LEN, value=(0, SEQ_LEN), step=5,
+        label_visibility="collapsed"
+    )
+    st.markdown(f"""
+    <div style="font-size:13px;color:{TEXT_SECONDARY};margin-top:-8px;">
+        显示区段 &nbsp;━━&nbsp;
+        <span style="color:{DATA_CYAN};font-weight:700;
+        font-family:'JetBrains Mono',monospace;">{time_range[0]}—{time_range[1]}</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1105,6 +1123,18 @@ if uploaded_file is not None:
     tuned_badge = f'<span style="background:{DATA_GREEN};color:#000;font-size:10px;font-weight:700;padding:1px 8px;border-radius:3px;margin-left:10px;">TUNED</span>' if is_tuned_model else ''
     sigma_badge = '<span style="background:#2E3A5C;color:#3DD9FF;font-size:10px;font-weight:600;padding:1px 8px;border-radius:3px;margin-left:6px;">3-SIGMA</span>' if has_mc else ''
 
+    # Dynamic mission header with breathing status
+    if combined_anom_ratio > ANOMALY_RATIO_CRIT:
+        status_cls = "alert"
+        status_text = "异常运行"
+    elif combined_anom_ratio > ANOMALY_RATIO_WARN:
+        status_cls = "alert"
+        status_text = "需关注"
+    else:
+        status_cls = ""
+        status_text = "正常运行"
+    render_mission_header(status_cls, status_text)
+
     st.markdown(f"""
     <div class="source-bar">
         <span class="label">DATA SOURCE</span>
@@ -1153,7 +1183,27 @@ if uploaded_file is not None:
         </div>
         """, unsafe_allow_html=True)
 
-    # ── 4 个标签页 ──
+    # ── 时间窗口切片（仅影响图表显示，异常统计基于全量数据）──
+    t0, t1 = time_range
+    t_axis_view = np.arange(t0, t1)
+    _sl = slice(t0, t1)
+    _at = actual_thrust[_sl]
+    _tp = thrust_pred[_sl]
+    _am = actual_mfr[_sl]
+    _mp = mfr_pred[_sl]
+    _ip = isp[_sl]
+    _ai = actual_isp[_sl]
+    _res = residuals[_sl]
+    _mres = mfr_residuals[_sl]
+    _ires = isp_residuals[_sl]
+    _tanom = is_anomaly[_sl]
+    _manom = mfr_is_anomaly[_sl]
+    _ianom = isp_is_anomaly[_sl]
+    _ts_v = _ts[_sl] if _ts.ndim > 0 else _ts
+    _ms_v = _ms[_sl] if _ms.ndim > 0 else _ms
+    _is_v = _is[_sl] if _is.ndim > 0 else _is
+
+    # 4 个标签页
     tab_telem, tab_anom, tab_report, tab_shap = st.tabs([
         "实时遥测",
         "异常检测",
@@ -1165,25 +1215,22 @@ if uploaded_file is not None:
     with tab_telem:
         section_header("实时遥测曲线", "REAL-TIME TELEMETRY")
 
-    t_axis = np.arange(SEQ_LEN)
-    # Per-dimension anomaly masks for highlighting
-    anom_masks = [is_anomaly, mfr_is_anomaly, isp_is_anomaly]
     fig_tel, axes_tel = plt.subplots(1, 3, figsize=(18, 5.4))
     for ax, actual, pred, amask, title, ylabel in [
-        (axes_tel[0], actual_thrust, thrust_pred, is_anomaly,
+        (axes_tel[0], _at, _tp, _tanom,
          '推力 · THRUST', '推力 (N)'),
-        (axes_tel[1], actual_mfr, mfr_pred, mfr_is_anomaly,
+        (axes_tel[1], _am, _mp, _manom,
          '质量流量 · MASS FLOW RATE', '流量 (mg/s)'),
-        (axes_tel[2], actual_isp, isp, isp_is_anomaly,
+        (axes_tel[2], _ai, _ip, _ianom,
          '比冲 · SPECIFIC IMPULSE', '比冲 (s)'),
     ]:
         max_val = max(np.max(actual), np.max(pred))
         if amask is not None and amask.any():
-            ax.fill_between(t_axis, 0, max_val * 1.18,
+            ax.fill_between(t_axis_view, 0, max_val * 1.18,
                             where=amask, color=NASA_RED, alpha=0.2,
                             label='异常区间 (3σ)')
-        ax.plot(t_axis, actual, color=DATA_CYAN,  lw=2.0, label='传感器实测')
-        ax.plot(t_axis, pred,   color=DATA_AMBER, lw=1.4, ls='--', label='AI 预测基准')
+        ax.plot(t_axis_view, actual, color=DATA_CYAN,  lw=2.0, label='传感器实测')
+        ax.plot(t_axis_view, pred,   color=DATA_AMBER, lw=1.4, ls='--', label='AI 预测基准')
         if ax is axes_tel[2]:
             ax.axhline(np.mean(pred), color=DATA_AMBER, ls=':', lw=1.2, alpha=0.5,
                        label=f'预测均值 {np.mean(pred):.0f} s')
@@ -1229,49 +1276,50 @@ if uploaded_file is not None:
     ax_heat = fig2.add_subplot(gs[2, :])
 
     # Thrust residual (top-left)
-    ax_t.plot(t_axis, residuals, color=STATUS_WARN, lw=1.5)
-    if _ts.ndim == 0 or _ts.std() < 1e-6:
-        ax_t.axhline(_ts[0] if _ts.ndim > 0 else _ts, color=thr_line_t, ls='--', lw=1.2, label=thr_label_t)
+    ax_t.plot(t_axis_view, _res, color=STATUS_WARN, lw=1.5)
+    if _ts_v.ndim == 0 or (_ts_v.ndim > 0 and _ts_v.std() < 1e-6):
+        ax_t.axhline(_ts_v[0] if _ts_v.ndim > 0 else _ts_v, color=thr_line_t, ls='--', lw=1.2, label=thr_label_t)
     else:
-        ax_t.plot(t_axis, _ts, color=thr_line_t, ls='--', lw=1.2, alpha=0.8, label=thr_label_t)
-    if is_anomaly.any():
-        ax_t.fill_between(t_axis, 0, residuals, where=is_anomaly, color=NASA_RED, alpha=0.3)
+        ax_t.plot(t_axis_view, _ts_v, color=thr_line_t, ls='--', lw=1.2, alpha=0.8, label=thr_label_t)
+    if _tanom.any():
+        ax_t.fill_between(t_axis_view, 0, _res, where=_tanom, color=NASA_RED, alpha=0.3)
     ax_t.legend(loc='upper right', fontsize=7)
     ax_t.grid(True, axis='y', alpha=0.3)
     apply_cn_to_axis(ax_t, title='推力残差 · THRUST', ylabel='残差 (N)')
 
     # MFR residual (top-right)
-    ax_m.plot(t_axis, mfr_residuals, color=DATA_CYAN, lw=1.5)
-    if _ms.ndim == 0 or _ms.std() < 1e-6:
-        ax_m.axhline(_ms[0] if _ms.ndim > 0 else _ms, color=thr_line_m, ls='--', lw=1.2, label=thr_label_m)
+    ax_m.plot(t_axis_view, _mres, color=DATA_CYAN, lw=1.5)
+    if _ms_v.ndim == 0 or (_ms_v.ndim > 0 and _ms_v.std() < 1e-6):
+        ax_m.axhline(_ms_v[0] if _ms_v.ndim > 0 else _ms_v, color=thr_line_m, ls='--', lw=1.2, label=thr_label_m)
     else:
-        ax_m.plot(t_axis, _ms, color=thr_line_m, ls='--', lw=1.2, alpha=0.8, label=thr_label_m)
-    if mfr_is_anomaly.any():
-        ax_m.fill_between(t_axis, 0, mfr_residuals, where=mfr_is_anomaly, color=NASA_RED, alpha=0.3)
+        ax_m.plot(t_axis_view, _ms_v, color=thr_line_m, ls='--', lw=1.2, alpha=0.8, label=thr_label_m)
+    if _manom.any():
+        ax_m.fill_between(t_axis_view, 0, _mres, where=_manom, color=NASA_RED, alpha=0.3)
     ax_m.legend(loc='upper right', fontsize=7)
     ax_m.grid(True, axis='y', alpha=0.3)
     apply_cn_to_axis(ax_m, title='质量流量残差 · MASS FLOW RATE', ylabel='残差 (mg/s)')
 
     # Isp residual (bottom row, full width)
-    ax_i.plot(t_axis, isp_residuals, color=DATA_VIOLET, lw=1.5)
-    if _is.ndim == 0 or _is.std() < 1e-6:
-        ax_i.axhline(_is[0] if _is.ndim > 0 else _is, color=thr_line_i, ls='--', lw=1.2, label=thr_label_i)
+    ax_i.plot(t_axis_view, _ires, color=DATA_VIOLET, lw=1.5)
+    if _is_v.ndim == 0 or (_is_v.ndim > 0 and _is_v.std() < 1e-6):
+        ax_i.axhline(_is_v[0] if _is_v.ndim > 0 else _is_v, color=thr_line_i, ls='--', lw=1.2, label=thr_label_i)
     else:
-        ax_i.plot(t_axis, _is, color=thr_line_i, ls='--', lw=1.2, alpha=0.8, label=thr_label_i)
-    if isp_is_anomaly.any():
-        ax_i.fill_between(t_axis, 0, isp_residuals, where=isp_is_anomaly, color=NASA_RED, alpha=0.3)
+        ax_i.plot(t_axis_view, _is_v, color=thr_line_i, ls='--', lw=1.2, alpha=0.8, label=thr_label_i)
+    if _ianom.any():
+        ax_i.fill_between(t_axis_view, 0, _ires, where=_ianom, color=NASA_RED, alpha=0.3)
     ax_i.legend(loc='upper right', fontsize=7)
     ax_i.grid(True, axis='y', alpha=0.3)
     apply_cn_to_axis(ax_i, title='比冲残差 · SPECIFIC IMPULSE', ylabel='残差 (s)', xlabel='时间步 (0.01s)')
 
     # 3D anomaly correlation heatmap
     heat_data = np.stack([
-        np.clip(residuals / (_ts + EPS), 0, 3),
-        np.clip(mfr_residuals / (_ms + EPS), 0, 3),
-        np.clip(isp_residuals / (_is + EPS), 0, 3),
+        np.clip(_res / (_ts_v + EPS), 0, 3),
+        np.clip(_mres / (_ms_v + EPS), 0, 3),
+        np.clip(_ires / (_is_v + EPS), 0, 3),
     ])
+    view_len = t1 - t0
     im = ax_heat.imshow(heat_data, aspect='auto', cmap='RdYlGn_r',
-                        vmin=0, vmax=3, extent=[0, SEQ_LEN, 0, 3])
+                        vmin=0, vmax=3, extent=[t0, t1, 0, 3])
     ax_heat.set_yticks([0.5, 1.5, 2.5])
     ax_heat.set_yticklabels(['比冲', '流量', '推力'], fontproperties=CN_TICK)
     ax_heat.tick_params(axis='y', colors=TEXT_PRIMARY)
@@ -1505,6 +1553,7 @@ if uploaded_file is not None:
             """, unsafe_allow_html=True)
 
 else:
+    render_mission_header()
     st.markdown(f"""
     <div class="welcome-screen">
         <div class="welcome-headline">▌ AWAITING TELEMETRY INPUT</div>
