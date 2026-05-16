@@ -691,8 +691,13 @@ if 'active_sn' not in st.session_state:
     st.session_state.active_sn = None
 if 'adapter_loaded_sn' not in st.session_state:
     st.session_state.adapter_loaded_sn = None
+if 'scoring_version' not in st.session_state:
+    st.session_state.scoring_version = 'v4'
 if 'history_reports' not in st.session_state:
     st.session_state.history_reports = []
+elif st.session_state.get('scoring_version') != 'v4':
+    st.session_state.history_reports = []
+    st.session_state.scoring_version = 'v4'
 
 
 @st.cache_resource
@@ -890,8 +895,15 @@ def telemetry_card(label_cn, label_en, value, unit="", status="nominal", delta_t
     spark_html = ""
     if sparkline_data is not None and len(sparkline_data) > 1:
         mid = len(sparkline_data) // 2
-        denom = np.mean(sparkline_data[:mid]) + EPS
-        delta_pct = (np.mean(sparkline_data[mid:]) - np.mean(sparkline_data[:mid])) / denom * 100
+        first_half = np.mean(sparkline_data[:mid])
+        second_half = np.mean(sparkline_data[mid:])
+        # When both halves near zero (e.g. anomaly ratio ≈ 0), just show flat
+        if first_half < 1e-5 and second_half < 1e-5:
+            delta_pct = 0.0
+        else:
+            denom = first_half + EPS
+            delta_pct = (second_half - first_half) / denom * 100
+            delta_pct = max(-99.0, min(99.0, delta_pct))  # cap at ±99%
         arrow = "↑" if delta_pct > 0.5 else "↓" if delta_pct < -0.5 else "→"
         arrow_color = DATA_GREEN if abs(delta_pct) < 2 else DATA_AMBER if abs(delta_pct) < 5 else NASA_RED
 
@@ -981,7 +993,7 @@ def render_health_radar(report, history_report=None):
     angles_plot = angles + [angles[0]]
     scores_plot = scores + [scores[0]]
 
-    fig, ax = plt.subplots(figsize=(6.2, 6.2), subplot_kw=dict(polar=True))
+    fig, ax = plt.subplots(figsize=(4.8, 4.8), subplot_kw=dict(polar=True))
     fig.patch.set_facecolor(BG_PANEL)
     ax.set_facecolor(BG_PANEL)
 
@@ -1206,20 +1218,16 @@ if uploaded_file is not None:
     _ianom = isp_is_anomaly[_sl]
     # Dynamic thresholds (must be computed before view slicing)
     if has_mc:
-        from inference_utils import (THRUST_NOISE_STD as _TNS, MFR_NOISE_STD as _MNS,
-                                      ISP_NOISE_STD as _INS, REF_RMSE_THRUST, REF_RMSE_MFR)
-        _rt = 0.15  # 15% relative tolerance
-        _ts = np.sqrt(_t_std**2 + _TNS**2 + (3*REF_RMSE_THRUST)**2 + (_rt*np.abs(thrust_pred))**2) * 3.0
-        _ms = np.sqrt(_m_std**2 + _MNS**2 + (3*REF_RMSE_MFR)**2 + (_rt*np.abs(mfr_pred))**2) * 3.0
-        # Dynamic Isp reference RMSE — use ACTUAL operating point
-        _C = 1e-6 * G0
-        _dT = 1.0 / (np.mean(actual_mfr) * _C + EPS)
-        _dM = np.mean(actual_thrust) / (np.mean(actual_mfr)**2 * _C + EPS)
-        _ref_isp = np.sqrt((_dT * REF_RMSE_THRUST)**2 + (_dM * REF_RMSE_MFR)**2)
-        _is = np.sqrt(_i_std**2 + _INS**2 + (3*_ref_isp)**2 + (_rt*np.abs(isp))**2) * 3.0
-        thr_label_t = '3σ 动态阈值'
-        thr_label_m = '3σ 动态阈值'
-        thr_label_i = '3σ 动态阈值'
+        from inference_utils import (NOISE_THRUST as _TNS, NOISE_MFR as _MNS,
+                                      BASELINE_THRUST, BASELINE_MFR, BASELINE_ISP,
+                                      _isp_uncertainty)
+        _ts = 3.0 * np.sqrt(_t_std**2 + _TNS**2 + BASELINE_THRUST**2)
+        _ms = 3.0 * np.sqrt(_m_std**2 + _MNS**2 + BASELINE_MFR**2)
+        _isp_ns = _isp_uncertainty(actual_thrust, actual_mfr, THRUST_NOISE_STD, MFR_NOISE_STD)
+        _is = 3.0 * np.sqrt(_i_std**2 + _isp_ns**2 + BASELINE_ISP**2)
+        thr_label_t = '3σ 统计阈值 (p25)'
+        thr_label_m = '3σ 统计阈值 (p25)'
+        thr_label_i = '3σ 统计阈值 (p25)'
         thr_line_t = DATA_GREEN
         thr_line_m = DATA_GREEN
         thr_line_i = DATA_GREEN
@@ -1279,8 +1287,8 @@ if uploaded_file is not None:
         section_header("异常检测与残差监控", "ANOMALY DETECTION")
 
         # ── 2+1 残差布局 + 三维关联热力图 ──
-        fig2 = plt.figure(figsize=(18, 9.5), constrained_layout=True)
-        gs = fig2.add_gridspec(3, 2, height_ratios=[1, 1, 0.55], hspace=0.45, wspace=0.28)
+        fig2 = plt.figure(figsize=(14, 9.5), constrained_layout=True)
+        gs = fig2.add_gridspec(3, 2, height_ratios=[1, 1, 0.55], hspace=0.45, wspace=0.06)
         ax_t = fig2.add_subplot(gs[0, 0])
         ax_m = fig2.add_subplot(gs[0, 1])
         ax_i = fig2.add_subplot(gs[1, :])
@@ -1342,28 +1350,42 @@ if uploaded_file is not None:
         render_fig(fig2)
 
         # ── 三维异常状态 ──
-        any_anom = is_anomaly.any() or mfr_is_anomaly.any() or isp_is_anomaly.any()
+        any_anom = combined_anom_mask.any()
+        # Per-dimension counts for diagnostic detail
+        _n_t = int(is_anomaly.sum())
+        _n_m = int(mfr_is_anomaly.sum())
+        _n_i = int(isp_is_anomaly.sum())
+        _n_comb = int(combined_anom_mask.sum())
 
         if any_anom:
-            _parts = []
-            if is_anomaly.any():     _parts.append(f'推力 {int(is_anomaly.sum())}步')
-            if mfr_is_anomaly.any(): _parts.append(f'流量 {int(mfr_is_anomaly.sum())}步')
-            if isp_is_anomaly.any(): _parts.append(f'比冲 {int(isp_is_anomaly.sum())}步')
             det_method = '3σ 统计检测' if has_mc else f'硬阈值 ({threshold} N)'
             st.markdown(f"""
             <div class="status-bar alert">
                 <span class="title">▲ 检测到异常</span>
-                {' / '.join(_parts)} 超过阈值 &nbsp;|&nbsp; 检测方法: {det_method}
+                综合 {_n_comb} 步 (2-of-3 投票) &nbsp;|&nbsp;
+                各维度: 推力 {_n_t} / 流量 {_n_m} / 比冲 {_n_i} &nbsp;|&nbsp;
+                检测方法: {det_method}
             </div>
             """, unsafe_allow_html=True)
         else:
             det_method = '3σ 统计检测' if has_mc else f'硬阈值 ({threshold} N)'
-            st.markdown(f"""
-            <div class="status-bar nominal">
-                <span class="title">● 系统运行正常</span>
-                推力 · 流量 · 比冲 三维残差均在阈值范围内 &nbsp;|&nbsp; 检测方法: {det_method}
-            </div>
-            """, unsafe_allow_html=True)
+            if _n_t + _n_m + _n_i > 0:
+                # No combined anomaly but individual dimensions flagged (isolated sensor noise)
+                st.markdown(f"""
+                <div class="status-bar nominal">
+                    <span class="title">● 系统运行正常</span>
+                    综合 0 步 (2-of-3 投票) &nbsp;|&nbsp;
+                    孤立信号: 推力 {_n_t} / 流量 {_n_m} / 比冲 {_n_i} &nbsp;|&nbsp;
+                    检测方法: {det_method}
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="status-bar nominal">
+                    <span class="title">● 系统运行正常</span>
+                    推力 · 流量 · 比冲 三维残差均在阈值范围内 &nbsp;|&nbsp; 检测方法: {det_method}
+                </div>
+                """, unsafe_allow_html=True)
 
     # ═══════════════════ 标签页 3：健康报告 ═══════════════════
     with tab_report:
@@ -1409,7 +1431,7 @@ if uploaded_file is not None:
             # ── Radar chart ──
             prev = st.session_state.history_reports[-2] if len(st.session_state.history_reports) > 1 else None
             fig_radar = render_health_radar(report, history_report=prev)
-            col_radar, col_spacer = st.columns([3, 1])
+            _, col_radar, _ = st.columns([1, 2, 1])
             with col_radar:
                 render_fig(fig_radar)
 
@@ -1438,19 +1460,19 @@ if uploaded_file is not None:
                     rows_html += f"""
                     <tr>
                         <td><b>{cn}</b> <span style="font-size:10px;color:{TEXT_DIM};">{d.upper()}</span></td>
-                        <td>RMS={dd['rms']:.4f} {u} | 异常 {dd['n_anomaly']}/{dd['total_steps']}步 ({dd['anomaly_ratio']*100:.1f}%)</td>
-                        <td>{_bar(dd['accuracy'])} {dd['accuracy']}/100</td>
-                        <td>{_badge(_health_level(dd['accuracy']))}</td>
+                        <td>RMS={dd['rms']:.4f} {u} | χ²={dd['chi2']}</td>
+                        <td>{_bar(dd['stat_score'])} {dd['stat_score']}/100</td>
+                        <td>{_badge(_health_level(dd['stat_score']))}</td>
                     </tr>
                     <tr>
-                        <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 异常评分</span></td>
-                        <td><span style="font-size:11px;color:{TEXT_DIM};">检测方法: {'3σ 统计' if has_mc else '硬阈值'} | 漂移: {_drift_badge(dd['drift_level'])}</span></td>
-                        <td>{_bar(dd['anomaly'])} {dd['anomaly']}/100</td>
-                        <td>{_badge(_health_level(dd['anomaly']))}</td>
+                        <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 工程合格</span></td>
+                        <td><span style="font-size:11px;color:{TEXT_DIM};">合规率 {dd['compliance_rate']*100:.1f}% | 异常 {dd['n_anomaly']}/{dd['total_steps']}步 ({dd['anomaly_ratio']*100:.1f}%) | 漂移: {_drift_badge(dd['drift_level'])}</span></td>
+                        <td>{_bar(dd['eng_score'])} {dd['eng_score']}/100</td>
+                        <td>{_badge(_health_level(dd['eng_score']))}</td>
                     </tr>
                     <tr>
-                        <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 维度综合</span></td>
-                        <td><span style="font-size:11px;color:{TEXT_DIM};">0.5×精度 + 0.5×异常</span></td>
+                        <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 综合（几何平均）</span></td>
+                        <td><span style="font-size:11px;color:{TEXT_DIM};">(统计 × 工程 × 异常)^(1/3) 短板效应</span></td>
                         <td><b>{_bar(dd['dim_score'])} {dd['dim_score']}/100</b></td>
                         <td>{_badge(_health_level(dd['dim_score']))}</td>
                     </tr>"""
@@ -1491,36 +1513,39 @@ if uploaded_file is not None:
         # ── 评分规则 (LaTeX) ──
         with st.expander("评分规则 Scoring Rules", expanded=False):
             st.latex(r"""
-            \text{【1】精度评分（每维）}\\[6pt]
-            S_{\rm acc} = f(r), \quad r = \frac{\mathrm{RMS_{dim}}}{\mathrm{RMSE_{ref}}}\\[6pt]
-            f(r) = \begin{cases}
-            100, & r \leq 1 \\[2pt]
-            70 + 30\cdot\frac{1.5-r}{0.5}, & 1 < r \leq 1.5 \\[2pt]
-            40 + 30\cdot\frac{2.5-r}{1.0}, & 1.5 < r \leq 2.5 \\[2pt]
-            15 + 25\cdot\frac{4.0-r}{1.5}, & 2.5 < r \leq 4.0 \\[2pt]
-            5 + 10\cdot\frac{8.0-r}{4.0}, & 4.0 < r \leq 8.0 \\[2pt]
-            5, & r > 8.0
+            \text{【1】双轨 z 分数（v4 p50 基线校准）}\\[6pt]
+            z_{\rm stat} = \frac{|e|}{\sqrt{\sigma_{\rm mc}^2 + \sigma_{\rm noise}^2 + \sigma_{p50}^2}},\quad
+            z_{\rm eng}  = \frac{|e|}{(\alpha_{\rm eff} \cdot |y_{\rm actual}|) / 3}\\[8pt]
+            \sigma_{p50}\text{：测试集残差中位数（推力 0.0531N, MFR 58.5mg/s）}\\[4pt]
+            \alpha_{\rm eff} = \max(\alpha_{\rm spec},\ 3\sigma_{p50}/|y|)\text{：自适应工程容差（模型能力兜底）}
+            """)
+            st.latex(r"""
+            \text{【2】统计判别分（p50 校准 χ² 曲线）}\\[6pt]
+            \chi^2 = \mathrm{mean}(z_{\rm stat}^2)\quad
+            \text{平均测试样本 }\chi^2\approx 9 \to 70\text{ 分}\\[6pt]
+            S_{\rm stat} = \begin{cases}
+            100, & \chi^2 \leq 1 \\[2pt]
+            100 - 7.5\cdot(\chi^2-1), & 1 < \chi^2 \leq 3 \\[2pt]
+            85 - 2.5\cdot(\chi^2-3), & 3 < \chi^2 \leq 9 \\[2pt]
+            70 - 1.56\cdot(\chi^2-9), & 9 < \chi^2 \leq 25 \\[2pt]
+            45 \cdot e^{-(\chi^2-25)/20}, & \chi^2 > 25
             \end{cases}
             """)
             st.latex(r"""
-            \text{【2】异常评分（每维）}\\[6pt]
-            S_{\rm anom} = 100 \cdot e^{-10a}, \quad
-            a = \frac{n_{\rm anom}}{n_{\rm total}}\\[6pt]
-            \text{检测：}\ |y_{\rm pred}-y_{\rm actual}| > 3\sqrt{\sigma^2_{\rm mc} + \sigma^2_{\rm noise}}
+            \text{【3】工程合格分 + 异常评分}\\[6pt]
+            S_{\rm eng}\ \propto\ \mathrm{P}(z_{\rm eng} < 3) = \text{容差内时间占比}\\[6pt]
+            S_{\rm anom} = 100 \cdot e^{-6a} \cdot \max(0.3,\ 1 - (\max z - 5)/10)
             """)
             st.latex(r"""
-            \text{【3】维度综合}\\[6pt]
-            S_{\rm dim} = 0.5 \cdot S_{\rm acc} + 0.5 \cdot S_{\rm anom}
-            """)
-            st.latex(r"""
-            \text{【4】三维一致性}\\[6pt]
-            J = \frac{|T \cap M \cap I|}{|T \cup M \cup I|}\\[6pt]
-            \text{高 } J \Rightarrow \text{真实故障；低 } J \Rightarrow \text{传感器噪声}
+            \text{【4】维度综合（几何平均，短板效应）}\\[6pt]
+            S_{\rm dim} = (S_{\rm stat} \cdot S_{\rm eng} \cdot S_{\rm anom})^{1/3}\\[6pt]
+            J = \frac{|T \cap M \cap I|}{|T \cup M \cup I|}\quad
+            \text{（三维异常一致性）}
             """)
             st.latex(r"""
             \text{【5】综合评分}\\[6pt]
-            S_{\rm overall} = \mathrm{mean}(S_T, S_M, S_I) \times
-            \bigl[\,0.85 + 0.15 \times (1 - J)\,\bigr]
+            S_{\rm overall} = (S_T \cdot S_M \cdot S_I)^{1/3} \times
+            \bigl[\,0.85 + 0.15 \cdot c_{\rm model}/100\,\bigr]
             """)
 
     FEATURE_PHYSICS = {

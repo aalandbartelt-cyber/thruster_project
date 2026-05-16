@@ -4,7 +4,7 @@
 > 上海大学  
 > 项目全称：基于多源动态特征与多目标耦合预测的航天器推进器数字孪生及健康监测系统
 
-基于 Attention-LSTM 与 SHAP 归因的航天器推进器数字孪生系统。已完成 v2 全流程开发（CUDA），同步在**华为云昇腾 CANN** 上进行国产化算力验证。
+基于 Attention-LSTM 与 SHAP 归因的航天器推进器数字孪生系统。已完成 v2 全流程开发（CUDA）+ v3 NASA 风格 Streamlit 大屏 + **v4 多维度科学健康评分系统**，同步在**华为云昇腾 CANN** 上进行国产化算力验证。
 
 > **项目定位**：使用 Kaggle 合成数据集（STFT）构建完整的 AI 工程流水线。核心交付是技术方案的工程可行性验证，而非依赖特定数据集的"自导自演"。所有结论在合成数据上成立，反映推进器的物理结构和数据规律，具备迁移到真实数据的条件。
 
@@ -14,7 +14,8 @@
 数据清洗 → 17维特征工程 → 5轮架构对比 → 训练 + 可复现性验证
   → 11种 mode 分项测试 → SHAP 归因 + Permutation 交叉验证
     → MC Dropout 不确定性量化 → CANN 国产化算力验证
-      → NASA 风格部署大屏 → 个体推进器微调方案
+      → NASA 风格部署大屏 (V3) → V4 科学健康评分 (p50基线+双轨+几何平均+2-of-3投票)
+        → 个体推进器微调方案
 ```
 
 ---
@@ -68,19 +69,28 @@ thruster_project/
 ├── model_test_v2.py            # [M] 测试评估 + 接口npy导出
 ├── analyze_ssf.py              # [M] SSF诊断分析
 ├── model_shap_v2.py            # [M] 17维 SHAP + Permutation
-├── inference_utils.py          # [M] 推理封装 + MC Dropout
+├── inference_utils.py          # [M] 推理封装 + MC Dropout + V4健康评分
 ├── model_anomaly_eval.py       # [Z] 真实标签异常评估
 ├── model_onnx_export.py        # [Z] ONNX导出 + INT8量化
-├── app_v2.py                   # [Z主导·M联调] Streamlit大屏
+├── app_v2.py                   # [Z主导·M联调] V2 Streamlit大屏 (回滚基线)
+├── app_v3.py                   # [M] V3 UI + V4评分 Streamlit大屏 ★当前版本
+│
+├── scripts/
+│   └── calibrate_baseline.py   # p50 baseline 标定脚本
+│
+├── docs/
+│   └── APP_V3_GUIDE.md         # V3/V4 完整逻辑与设计文档
 │
 ├── outputs/
 │   ├── models/v2/              # 模型权重
 │   ├── predictions/v2/         # 接口npy + SHAP npy
 │   └── figures/v2/             # 图表
 │
-├── .gitignore
+├── CLAUDE.md                   # 项目上下文 (AI助手)
+├── NIGHT_LOG.md                # 开发日志 + V4迭代记录
+├── README.md
 ├── requirements.txt
-└── README.md
+└── .gitignore
 ```
 
 ---
@@ -139,8 +149,19 @@ python model_onnx_export.py      # → FP32/FP16/INT8 三档对比
 ### 启动数字孪生大屏
 
 ```bash
-streamlit run app_v2.py
+streamlit run app_v3.py     # V3 UI + V4 多维度科学健康评分 (当前版本)
+# streamlit run app_v2.py   # V2 回滚基线
 ```
+
+### V4 健康评分系统
+
+详见 `docs/APP_V3_GUIDE.md`，核心特性：
+- **p50 统计基线**: 独立标定，打破循环标定 (全员100分问题)
+- **双轨评分**: 统计精度 + 工程合规 + 异常检测 → 几何平均
+- **自适应工程容差**: `max(物理指标, 模型能力下限)`
+- **2-of-3 投票**: 至少2维同时异常才算故障 (降低传感器误报)
+- **三维一致性**: Jaccard 相似度评估异常物理关联性
+- **5 轴雷达图**: 推力/流量/比冲/一致性/置信度 健康画像
 
 ---
 
