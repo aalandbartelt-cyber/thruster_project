@@ -1220,25 +1220,66 @@ if uploaded_file is not None:
         thr_line_m = NASA_RED
         thr_line_i = NASA_RED
 
-    data_rows = [
-        (residuals,     _ts, is_anomaly,     '推力残差 · THRUST',    'N',     STATUS_WARN, thr_label_t, thr_line_t),
-        (mfr_residuals, _ms, mfr_is_anomaly, '质量流量残差 · MASS FLOW RATE', 'mg/s',  DATA_CYAN, thr_label_m, thr_line_m),
-        (isp_residuals, _is, isp_is_anomaly, '比冲残差 · SPECIFIC IMPULSE', 's', DATA_VIOLET, thr_label_i, thr_line_i),
-    ]
-    fig2, axes_res = plt.subplots(3, 1, figsize=(18, 7.5))
-    for idx, (_res, _thr, _anom, _title, _yl, _clr, _thr_label, _thr_color) in enumerate(data_rows):
-        ax = axes_res[idx]
-        ax.plot(t_axis, _res, color=_clr, lw=1.5)
-        if _thr.ndim == 0 or _thr.std() < 1e-6:
-            ax.axhline(_thr[0] if _thr.ndim > 0 else _thr, color=_thr_color, ls='--', lw=1.2, label=_thr_label)
-        else:
-            ax.plot(t_axis, _thr, color=_thr_color, ls='--', lw=1.2, alpha=0.8, label=_thr_label)
-        if _anom.any():
-            ax.fill_between(t_axis, 0, _res, where=_anom, color=NASA_RED, alpha=0.3)
-        ax.legend(loc='upper right', fontsize=8)
-        ax.grid(True, axis='y', alpha=0.3)
-        xlabel = '时间步 (0.01s)' if idx == 2 else ''
-        apply_cn_to_axis(ax, title=_title, ylabel=f'残差 ({_yl})', xlabel=xlabel)
+    # ── 2+1 残差布局 + 三维关联热力图 ──
+    fig2 = plt.figure(figsize=(18, 9.5))
+    gs = fig2.add_gridspec(3, 2, height_ratios=[1, 1, 0.55], hspace=0.45, wspace=0.28)
+    ax_t = fig2.add_subplot(gs[0, 0])
+    ax_m = fig2.add_subplot(gs[0, 1])
+    ax_i = fig2.add_subplot(gs[1, :])
+    ax_heat = fig2.add_subplot(gs[2, :])
+
+    # Thrust residual (top-left)
+    ax_t.plot(t_axis, residuals, color=STATUS_WARN, lw=1.5)
+    if _ts.ndim == 0 or _ts.std() < 1e-6:
+        ax_t.axhline(_ts[0] if _ts.ndim > 0 else _ts, color=thr_line_t, ls='--', lw=1.2, label=thr_label_t)
+    else:
+        ax_t.plot(t_axis, _ts, color=thr_line_t, ls='--', lw=1.2, alpha=0.8, label=thr_label_t)
+    if is_anomaly.any():
+        ax_t.fill_between(t_axis, 0, residuals, where=is_anomaly, color=NASA_RED, alpha=0.3)
+    ax_t.legend(loc='upper right', fontsize=7)
+    ax_t.grid(True, axis='y', alpha=0.3)
+    apply_cn_to_axis(ax_t, title='推力残差 · THRUST', ylabel='残差 (N)')
+
+    # MFR residual (top-right)
+    ax_m.plot(t_axis, mfr_residuals, color=DATA_CYAN, lw=1.5)
+    if _ms.ndim == 0 or _ms.std() < 1e-6:
+        ax_m.axhline(_ms[0] if _ms.ndim > 0 else _ms, color=thr_line_m, ls='--', lw=1.2, label=thr_label_m)
+    else:
+        ax_m.plot(t_axis, _ms, color=thr_line_m, ls='--', lw=1.2, alpha=0.8, label=thr_label_m)
+    if mfr_is_anomaly.any():
+        ax_m.fill_between(t_axis, 0, mfr_residuals, where=mfr_is_anomaly, color=NASA_RED, alpha=0.3)
+    ax_m.legend(loc='upper right', fontsize=7)
+    ax_m.grid(True, axis='y', alpha=0.3)
+    apply_cn_to_axis(ax_m, title='质量流量残差 · MASS FLOW RATE', ylabel='残差 (mg/s)')
+
+    # Isp residual (bottom row, full width)
+    ax_i.plot(t_axis, isp_residuals, color=DATA_VIOLET, lw=1.5)
+    if _is.ndim == 0 or _is.std() < 1e-6:
+        ax_i.axhline(_is[0] if _is.ndim > 0 else _is, color=thr_line_i, ls='--', lw=1.2, label=thr_label_i)
+    else:
+        ax_i.plot(t_axis, _is, color=thr_line_i, ls='--', lw=1.2, alpha=0.8, label=thr_label_i)
+    if isp_is_anomaly.any():
+        ax_i.fill_between(t_axis, 0, isp_residuals, where=isp_is_anomaly, color=NASA_RED, alpha=0.3)
+    ax_i.legend(loc='upper right', fontsize=7)
+    ax_i.grid(True, axis='y', alpha=0.3)
+    apply_cn_to_axis(ax_i, title='比冲残差 · SPECIFIC IMPULSE', ylabel='残差 (s)', xlabel='时间步 (0.01s)')
+
+    # 3D anomaly correlation heatmap
+    heat_data = np.stack([
+        np.clip(residuals / (_ts + EPS), 0, 3),
+        np.clip(mfr_residuals / (_ms + EPS), 0, 3),
+        np.clip(isp_residuals / (_is + EPS), 0, 3),
+    ])
+    im = ax_heat.imshow(heat_data, aspect='auto', cmap='RdYlGn_r',
+                        vmin=0, vmax=3, extent=[0, SEQ_LEN, 0, 3])
+    ax_heat.set_yticks([0.5, 1.5, 2.5])
+    ax_heat.set_yticklabels(['比冲', '流量', '推力'], fontproperties=CN_TICK)
+    ax_heat.tick_params(axis='y', colors=TEXT_PRIMARY)
+    ax_heat.tick_params(axis='x', colors=TEXT_SECONDARY)
+    cbar = plt.colorbar(im, ax=ax_heat, orientation='horizontal', pad=0.18, shrink=0.5)
+    cbar.set_label('残差/阈值 比值', fontproperties=CN_LABEL, color=TEXT_PRIMARY)
+    cbar.ax.tick_params(colors=TEXT_SECONDARY)
+    apply_cn_to_axis(ax_heat, title='三维异常关联热力图', xlabel='时间步 (0.01s)')
     plt.tight_layout(pad=2.0)
     render_fig(fig2)
 
