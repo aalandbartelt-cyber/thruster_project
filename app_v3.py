@@ -947,7 +947,7 @@ def render_fig(fig):
     fig.savefig(buf, format='png', dpi=180, bbox_inches='tight',
                 facecolor=BG_PANEL, edgecolor='none')
     buf.seek(0)
-    st.image(buf, use_container_width=True)
+    st.image(buf, width='stretch')
     plt.close(fig)
 
 
@@ -1239,7 +1239,7 @@ if uploaded_file is not None:
     with tab_telem:
         section_header("实时遥测曲线", "REAL-TIME TELEMETRY")
 
-        fig_tel, axes_tel = plt.subplots(1, 3, figsize=(18, 5.4))
+        fig_tel, axes_tel = plt.subplots(1, 3, figsize=(18, 5.4), constrained_layout=True)
         for ax, actual, pred, amask, title, ylabel in [
             (axes_tel[0], _at, _tp, _tanom,
              '推力 · THRUST', '推力 (N)'),
@@ -1261,7 +1261,6 @@ if uploaded_file is not None:
             ax.legend(loc='upper right')
             ax.grid(True, axis='y')
             apply_cn_to_axis(ax, title=title, xlabel='时间步 (0.01s)', ylabel=ylabel)
-        plt.tight_layout(pad=2.0)
         render_fig(fig_tel)
 
     # ═══════════════════ 标签页 2：异常检测 ═══════════════════
@@ -1269,7 +1268,7 @@ if uploaded_file is not None:
         section_header("异常检测与残差监控", "ANOMALY DETECTION")
 
         # ── 2+1 残差布局 + 三维关联热力图 ──
-        fig2 = plt.figure(figsize=(18, 9.5))
+        fig2 = plt.figure(figsize=(18, 9.5), constrained_layout=True)
         gs = fig2.add_gridspec(3, 2, height_ratios=[1, 1, 0.55], hspace=0.45, wspace=0.28)
         ax_t = fig2.add_subplot(gs[0, 0])
         ax_m = fig2.add_subplot(gs[0, 1])
@@ -1329,7 +1328,6 @@ if uploaded_file is not None:
         cbar.set_label('残差/阈值 比值', fontproperties=CN_LABEL, color=TEXT_PRIMARY)
         cbar.ax.tick_params(colors=TEXT_SECONDARY)
         apply_cn_to_axis(ax_heat, title='三维异常关联热力图', xlabel='时间步 (0.01s)')
-        plt.tight_layout(pad=2.0)
         render_fig(fig2)
 
         # ── 三维异常状态 ──
@@ -1590,7 +1588,7 @@ if uploaded_file is not None:
                           gridcolor=GRID_LINE, zerolinecolor=BORDER),
                 yaxis=dict(color=TEXT_PRIMARY, gridcolor=GRID_LINE),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
             with st.expander("特征物理含义 Feature Physics", expanded=False):
                 for feat in feats:
