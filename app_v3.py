@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from matplotlib import rcParams
 from matplotlib.font_manager import FontProperties
+import plotly.graph_objects as go
 
 from inference_utils import (
     load_dual_model,
@@ -1513,38 +1514,88 @@ if uploaded_file is not None:
             \bigl[\,0.85 + 0.15 \times (1 - J)\,\bigr]
             """)
 
+    FEATURE_PHYSICS = {
+        'ton': '开机时长 — 单次脉冲点火持续时长',
+        'vl': '阀门电压 — 控制推进剂供给的电磁阀电压',
+        'test_pressure': '测试压力 — 推进剂储罐当前压力读数',
+        'cumulated_on_time': '累计开机时长 — 推进器全寿命周期总点火时间',
+        'cumulated_throughput': '累计消耗 — 推进剂全寿命周期总消耗量',
+        'cumulated_pulses': '累计脉冲数 — 推进器全寿命周期总点火次数',
+        'ssf': '稳态因子 — 表征推进器工作状态稳定程度的指标',
+        'health_check': '健康检查 — 自检系统输出的健康状态编码',
+        'ramp1': '斜坡特征1 — 推力上升段第一段斜率相关特征',
+        'ramp2': '斜坡特征2 — 推力上升段第二段斜率相关特征',
+        'ramp3': '斜坡特征3 — 推力下降段第一段斜率相关特征',
+        'ramp4': '斜坡特征4 — 推力下降段第二段斜率相关特征',
+        'onmod': '开机调制 — 点火过程中推力调制特征',
+        'offmod': '关机调制 — 关机过程中推力衰减调制特征',
+        'random_short': '随机短脉冲 — 短时随机脉冲激励响应特征',
+        'random_long': '随机长脉冲 — 长时随机脉冲激励响应特征',
+        'random_mixed': '随机混合脉冲 — 混合时长随机脉冲激励响应特征',
+    }
+
     # ═══════════════════ 标签页 4：SHAP 归因 ═══════════════════
     with tab_shap:
         if shap_data is not None:
             section_header("SHAP 特征归因分析", "ATTRIBUTION ANALYSIS")
-            col_s1, col_s2, col_s3 = st.columns(3)
-            for _col, _key, _title, _color in [
-                (col_s1, 'thrust', '推力 Thrust', '#e74c3c'),
-                (col_s2, 'mfr',    '质量流量 MFR', '#3498db'),
-                (col_s3, 'isp', '比冲 Isp', '#2ecc71'),
-            ]:
-                with _col:
-                    _vals = np.array(shap_data[_key], dtype=float).ravel()
-                    if _vals.ndim != 1 or len(_vals) != 17:
-                        st.write(f"⚠️ SHAP data shape error: {_key}={_vals.shape}")
-                        continue
-                    _idx = np.argsort(_vals)[-7:]
-                    _fig, _ax = plt.subplots(figsize=(4.5, 3.5))
-                    _ax.barh(range(len(_idx)), _vals[_idx], color=_color, alpha=0.8, height=0.6)
-                    _ax.set_yticks(range(len(_idx)))
-                    _lbls = [shap_data['feats'][i] for i in _idx]
-                    _ax.set_yticklabels(_lbls, fontsize=8)
-                    _ax.invert_yaxis()
-                    _ax.set_title(_title, fontsize=11, fontweight='bold', color=TEXT_PRIMARY,
-                                  fontproperties=CN_TITLE)
-                    _ax.tick_params(colors=TEXT_SECONDARY)
-                    _ax.set_xticks([])
-                    for _b, _v in zip(_ax.containers[0], _vals[_idx]):
-                        _ax.text(_b.get_width()*1.02, _b.get_y()+_b.get_height()/2,
-                                 f'{_v:.2e}', va='center', fontsize=7, color=TEXT_PRIMARY)
-                    for side in ['top','right','left','bottom']:
-                        _ax.spines[side].set_visible(False)
-                    render_fig(_fig)
+
+            feats = shap_data['feats']
+            targets = {
+                '推力': ('thrust', DATA_CYAN),
+                '质量流量': ('mfr', DATA_AMBER),
+                '比冲': ('isp', DATA_VIOLET),
+            }
+
+            fig = go.Figure()
+            for tgt_name, (key, color) in targets.items():
+                vals = np.array(shap_data[key], dtype=float).ravel()
+                idx = np.argsort(vals)[-10:]
+                fig.add_trace(go.Bar(
+                    y=[feats[i] for i in idx],
+                    x=vals[idx],
+                    orientation='h',
+                    name=tgt_name,
+                    visible=(tgt_name == '推力'),
+                    marker_color=color,
+                    marker_line=dict(width=0.5, color=BORDER),
+                    hovertemplate='<b>%{{y}}</b><br>SHAP: %{{x:.3e}}<extra></extra>',
+                ))
+
+            fig.update_layout(
+                updatemenus=[dict(
+                    buttons=[
+                        dict(label='推力', method='update',
+                             args=[{'visible': [True, False, False]},
+                                   {'title': 'SHAP 特征归因 — 推力 Thrust'}]),
+                        dict(label='质量流量', method='update',
+                             args=[{'visible': [False, True, False]},
+                                   {'title': 'SHAP 特征归因 — 质量流量 MFR'}]),
+                        dict(label='比冲', method='update',
+                             args=[{'visible': [False, False, True]},
+                                   {'title': 'SHAP 特征归因 — 比冲 Isp'}]),
+                    ],
+                    direction='down',
+                    x=0.85, y=1.12,
+                    bgcolor=BG_PANEL,
+                    bordercolor=BORDER,
+                    font=dict(color=TEXT_PRIMARY, family='Noto Sans SC', size=12),
+                )],
+                title=dict(text='SHAP 特征归因 — 推力 Thrust', font=dict(color=TEXT_PRIMARY, size=16)),
+                plot_bgcolor=BG_PANEL,
+                paper_bgcolor=BG_PANEL,
+                font=dict(family='Noto Sans SC', color=TEXT_PRIMARY, size=11),
+                height=420,
+                margin=dict(l=140, r=60, t=80, b=40),
+                xaxis=dict(title='|SHAP| 归因值', color=TEXT_SECONDARY,
+                          gridcolor=GRID_LINE, zerolinecolor=BORDER),
+                yaxis=dict(color=TEXT_PRIMARY, gridcolor=GRID_LINE),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            with st.expander("特征物理含义 Feature Physics", expanded=False):
+                for feat in feats:
+                    desc = FEATURE_PHYSICS.get(feat, '—')
+                    st.markdown(f"- **`{feat}`** &nbsp;━&nbsp; {desc}")
         else:
             st.markdown(f"""
             <div style="text-align:center;padding:60px;color:{TEXT_DIM};font-size:15px;">
