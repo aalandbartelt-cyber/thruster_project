@@ -247,16 +247,19 @@ REF_RMSE_MFR    = 20.8     # mg/s
 # REF_RMSE_ISP computed dynamically via error propagation at data mean operating point
 
 
-def _sigma_anomaly_mask(pred, actual, mc_std, noise_std, k=3.0, ref_rmse=None):
-    """Sigma-based anomaly detection: |pred - actual| > k * sqrt(mc_std^2 + noise_std^2 + ref_rmse^2).
+def _sigma_anomaly_mask(pred, actual, mc_std, noise_std, k=3.0, ref_rmse=None, rel_tol=0.10):
+    """Sigma-based anomaly detection with mixed absolute + relative tolerance.
 
-    The ref_rmse term floors sigma at the model's known average error, so the
-    threshold k*sigma >= k*ref_rmse — only flagging points k times worse than
-    the model's typical performance.
+    threshold = k * sqrt(mc_std^2 + noise_std^2 + (2*ref_rmse)^2 + (rel_tol*|pred|)^2)
+
+    The 2*ref_rmse floor prevents tight thresholds when MC uncertainty is low.
+    The rel_tol term adapts threshold to signal magnitude — critical for low-thrust
+    conditions where absolute RMSE would otherwise dominate.
     """
     _var = mc_std ** 2 + noise_std ** 2
     if ref_rmse is not None:
-        _var = _var + ref_rmse ** 2
+        _var = _var + (2.0 * ref_rmse) ** 2
+    _var = _var + (rel_tol * np.abs(pred)) ** 2
     sigma = np.sqrt(_var)
     z_score = np.abs(pred - actual) / (sigma + EPS)
     return z_score > k, z_score
