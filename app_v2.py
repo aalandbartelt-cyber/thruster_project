@@ -23,10 +23,6 @@ from matplotlib.font_manager import FontProperties
 
 from inference_utils import (
     load_dual_model,
-    load_adapter_model,
-    load_model_for_sn,
-    ADAPTER_AVAILABLE_SNS,
-    OPTIMAL_FINETUNE_STRATEGY,
     predict,
     predict_with_uncertainty,
     compute_residuals,
@@ -35,7 +31,6 @@ from inference_utils import (
     G0,
     EPS,
     MG_PER_S_TO_KG_PER_S,
-    _health_level,
 )
 from data_pipeline_v2 import load_sequence_window, THRUST_SCALE, MFR_MAX
 
@@ -623,20 +618,11 @@ st.markdown(f"""
 
 
 # ════════════════════════════════════════════════════════════════════
-# 五、模型加载与选择
+# 五、缓存
 # ════════════════════════════════════════════════════════════════════
 
-# Session state
-if 'model_mode' not in st.session_state:
-    st.session_state.model_mode = 'GLOBAL'
-if 'active_sn' not in st.session_state:
-    st.session_state.active_sn = None
-if 'adapter_loaded_sn' not in st.session_state:
-    st.session_state.adapter_loaded_sn = None
-
-
 @st.cache_resource
-def load_global_model_cached():
+def load_model():
     return load_dual_model("outputs/models/v2/dual_output_lstm_v2.pth")
 
 
@@ -654,37 +640,15 @@ def load_shap_data():
           'cumulated_pulses','ssf','health_check','ramp1','ramp2','ramp3','ramp4',
           'onmod','offmod','random_short','random_long','random_mixed']
     try:
-        s_t = np.load(f"{_d}/shap_thrust.npy")
-        s_m = np.load(f"{_d}/shap_mfr.npy")
-        s_i = np.load(f"{_d}/shap_isp.npy")
-        return {'thrust': np.abs(s_t), 'mfr': np.abs(s_m), 'isp': np.abs(s_i), 'feats': _f}
+        st = np.load(f"{_d}/shap_thrust.npy")
+        sm = np.load(f"{_d}/shap_mfr.npy")
+        si = np.load(f"{_d}/shap_isp.npy")
+        return {'thrust': np.abs(st), 'mfr': np.abs(sm), 'isp': np.abs(si), 'feats': _f}
     except (FileNotFoundError, OSError, ValueError):
         return None
 
 
-def get_active_model(sn=None):
-    """根据当前选择的模式返回模型和标签。文件 SN 优先于侧边栏选择。"""
-    # GLOBAL 模式：始终返回全局模型
-    if st.session_state.model_mode == 'GLOBAL':
-        return load_global_model_cached(), "GLOBAL"
-
-    # TUNED 模式：文件 SN 优先，侧边栏选择作 fallback
-    target_sn = sn or st.session_state.active_sn
-    if target_sn is None:
-        return load_global_model_cached(), "GLOBAL"
-
-    # 该 SN 是否有 adapter 可用
-    if OPTIMAL_FINETUNE_STRATEGY.get(target_sn) != 'adapter':
-        return load_global_model_cached(), f"GLOBAL (SN{target_sn} skip)"
-
-    global_model = load_global_model_cached()
-    adapter = load_adapter_model(global_model, target_sn)
-    if adapter is not None:
-        return adapter, f"SN{target_sn}-TUNED"
-    return global_model, "GLOBAL"
-
-
-global_model_cache = load_global_model_cached()
+model = load_model()
 metadata = load_metadata()
 shap_data = load_shap_data()
 
@@ -702,40 +666,6 @@ with st.sidebar:
     <div class="sidebar-header">
         <div class="sh-cn">任务控制台</div>
         <div class="sh-en">MISSION CONTROL</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="sidebar-section-title">模型选择</div>
-    <div class="sidebar-section-en">MODEL SELECTION</div>
-    """, unsafe_allow_html=True)
-
-    model_options = ['GLOBAL'] + [f'SN{sn}-TUNED' for sn in ADAPTER_AVAILABLE_SNS]
-    model_choice = st.selectbox(
-        'model_choice',
-        model_options,
-        index=0,
-        label_visibility='collapsed',
-        key='model_selector'
-    )
-
-    if model_choice == 'GLOBAL':
-        st.session_state.model_mode = 'GLOBAL'
-        st.session_state.active_sn = None
-    else:
-        st.session_state.model_mode = 'TUNED'
-        st.session_state.active_sn = int(model_choice.replace('SN', '').replace('-TUNED', ''))
-
-    is_tuned = st.session_state.model_mode == 'TUNED'
-    model_label = model_choice
-    strategy_label = OPTIMAL_FINETUNE_STRATEGY.get(st.session_state.active_sn, 'global') if st.session_state.active_sn else 'global'
-
-    st.markdown(f"""
-    <div style="font-size:13px;color:{TEXT_SECONDARY};margin-top:-8px;">
-        当前模型 &nbsp;━━&nbsp;
-        <span style="color:{DATA_GREEN if is_tuned else DATA_CYAN};font-weight:700;
-        font-family:'JetBrains Mono',monospace;font-size:15px;">{model_label}</span>
-        {f'<span style="color:{DATA_AMBER};font-size:11px;margin-left:8px;">[微调优化]</span>' if is_tuned else f'<span style="color:{TEXT_DIM};font-size:11px;margin-left:8px;">[全局基座]</span>'}
     </div>
     """, unsafe_allow_html=True)
 
@@ -882,18 +812,13 @@ if uploaded_file is not None:
         matched = metadata[metadata['filename'] == fname]
         if len(matched) > 0:
             meta_row = matched.iloc[0]
-            file_sn = int(meta_row['sn'])
-
-            # 根据上传文件自动匹配对应 SN 的微调模型
-            active_model, model_label = get_active_model(file_sn)
-
             x, y_norm, _ = load_sequence_window(tmp_path, meta_row,
                                                 start=offset, seq_len=SEQ_LEN)
             x_tensor = torch.from_numpy(x).float().unsqueeze(0)
 
             (thrust_pred, mfr_pred, isp,
              thrust_std, mfr_std, isp_std) = predict_with_uncertainty(
-                 active_model, x_tensor, n_samples=MC_DROPOUT_SAMPLES)
+                 model, x_tensor, n_samples=MC_DROPOUT_SAMPLES)
             thrust_pred = thrust_pred.squeeze()
             mfr_pred    = mfr_pred.squeeze()
             isp         = isp.squeeze()
@@ -909,7 +834,6 @@ if uploaded_file is not None:
             source_label = "模型直接推理"
         else:
             model_conf = 90
-            thrust_std = mfr_std = isp_std = None
             preds_npy   = np.load("outputs/predictions/v2/predictions_dual.npy")
             targets_npy = np.load("outputs/predictions/v2/targets_dual.npy")
             sample_idx = hash(fname) % len(preds_npy)
@@ -923,46 +847,16 @@ if uploaded_file is not None:
 
         actual_thrust, actual_mfr, actual_isp = _compute_actuals(
             thrust_true, mfr_true, SEQ_LEN)
-
-        # MC Dropout uncertainty for sigma-based anomaly detection
-        _t_std = thrust_std
-        _m_std = mfr_std
-        _i_std = isp_std
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    has_mc = (_t_std is not None)
-    res = compute_residuals(
-        thrust_pred, actual_thrust, threshold,
-        pred_mfr=mfr_pred, actual_mfr=actual_mfr,
-        pred_isp=isp, actual_isp=actual_isp,
-        thrust_std=_t_std, mfr_std=_m_std, isp_std=_i_std)
-
-    residuals      = res['residuals']
-    is_anomaly     = res['is_anomaly']
-    anomaly_ratio  = res['anomaly_ratio']
-    mfr_residuals  = res.get('mfr_residuals', np.abs(mfr_pred - actual_mfr))
-    mfr_is_anomaly = res.get('mfr_is_anomaly', mfr_residuals > threshold * (MFR_MAX / THRUST_SCALE))
-    mfr_anom_ratio = res.get('mfr_anomaly_ratio', float(mfr_is_anomaly.mean()))
-    isp_residuals  = res.get('isp_residuals', np.abs(isp - actual_isp))
-    isp_is_anomaly = res.get('isp_is_anomaly', isp_residuals > threshold * ISP_THRESHOLD_SCALE)
-    isp_anom_ratio = res.get('isp_anomaly_ratio', float(isp_is_anomaly.mean()))
-
-    # Combined anomaly ratio (any dimension)
-    combined_anom_mask = is_anomaly | mfr_is_anomaly | isp_is_anomaly
-    combined_anom_ratio = float(combined_anom_mask.mean())
-
-    is_tuned_model = (model_label != 'GLOBAL')
-    tuned_badge = f'<span style="background:{DATA_GREEN};color:#000;font-size:10px;font-weight:700;padding:1px 8px;border-radius:3px;margin-left:10px;">TUNED</span>' if is_tuned_model else ''
-    sigma_badge = '<span style="background:#2E3A5C;color:#3DD9FF;font-size:10px;font-weight:600;padding:1px 8px;border-radius:3px;margin-left:6px;">3-SIGMA</span>' if has_mc else ''
+    residuals, is_anomaly, anomaly_ratio = compute_residuals(
+        thrust_pred, actual_thrust, threshold)
 
     st.markdown(f"""
     <div class="source-bar">
         <span class="label">DATA SOURCE</span>
         &nbsp;&nbsp;<span class="value">{fname}</span>
-        &nbsp;&nbsp;<span style="color:{NASA_RED};font-weight:700;">/</span>&nbsp;&nbsp;
-        <span class="label">MODEL</span>
-        &nbsp;&nbsp;<span class="accent">{model_label}</span>{tuned_badge}{sigma_badge}
         &nbsp;&nbsp;<span style="color:{NASA_RED};font-weight:700;">/</span>&nbsp;&nbsp;
         <span class="label">MODE</span>
         &nbsp;&nbsp;<span class="accent">{source_label}</span>
@@ -977,9 +871,9 @@ if uploaded_file is not None:
     mean_isp    = np.mean(isp)
 
     residual_rms = float(np.sqrt(np.mean(residuals**2)))
-    if combined_anom_ratio < ANOMALY_RATIO_WARN:
+    if anomaly_ratio < ANOMALY_RATIO_WARN:
         anom_status, anom_delta = "nominal", "状态正常"
-    elif combined_anom_ratio < ANOMALY_RATIO_CRIT:
+    elif anomaly_ratio < ANOMALY_RATIO_CRIT:
         anom_status, anom_delta = "warning", "异常升高"
     else:
         anom_status, anom_delta = "critical", "严重异常"
@@ -988,38 +882,26 @@ if uploaded_file is not None:
     with c1: telemetry_card("峰值推力",   "PEAK THRUST",      f"{peak_thrust:.2f}",      " N",    "nominal")
     with c2: telemetry_card("平均质量流量","MEAN MASS FLOW",  f"{mean_mfr:.1f}",          " mg/s", "nominal")
     with c3: telemetry_card("平均比冲",   "SPECIFIC IMPULSE", f"{mean_isp:.1f}",          " s",    "nominal")
-    with c4: telemetry_card("异常占比(3D)","ANOMALY RATIO 3D", f"{combined_anom_ratio*100:.2f}", " %",    anom_status, anom_delta)
-
-    if is_tuned_model:
-        st.markdown(f"""
-        <div style="text-align:center;margin:-8px 0 16px 0;">
-            <span style="background:{BG_PANEL_HI};color:{DATA_GREEN};font-size:11px;font-weight:600;
-                         padding:4px 14px;border-radius:4px;border:1px solid {BORDER};">
-                ✓ 个体微调模型 &nbsp;━&nbsp; 针对 SN{st.session_state.active_sn} 优化（零遗忘，base冻结）
-            </span>
-        </div>
-        """, unsafe_allow_html=True)
+    with c4: telemetry_card("异常占比",   "ANOMALY RATIO",    f"{anomaly_ratio*100:.2f}", " %",    anom_status, anom_delta)
 
     # ── 实时遥测曲线 ──
     section_header("实时遥测曲线", "REAL-TIME TELEMETRY")
 
     t_axis = np.arange(SEQ_LEN)
-    # Per-dimension anomaly masks for highlighting
-    anom_masks = [is_anomaly, mfr_is_anomaly, isp_is_anomaly]
     fig_tel, axes_tel = plt.subplots(1, 3, figsize=(18, 5.4))
-    for ax, actual, pred, amask, title, ylabel in [
-        (axes_tel[0], actual_thrust, thrust_pred, is_anomaly,
+    for ax, actual, pred, title, ylabel in [
+        (axes_tel[0], actual_thrust, thrust_pred,
          '推力 · THRUST', '推力 (N)'),
-        (axes_tel[1], actual_mfr, mfr_pred, mfr_is_anomaly,
+        (axes_tel[1], actual_mfr, mfr_pred,
          '质量流量 · MASS FLOW RATE', '流量 (mg/s)'),
-        (axes_tel[2], actual_isp, isp, isp_is_anomaly,
+        (axes_tel[2], actual_isp, isp,
          '比冲 · SPECIFIC IMPULSE', '比冲 (s)'),
     ]:
         max_val = max(np.max(actual), np.max(pred))
-        if amask is not None and amask.any():
+        if is_anomaly is not None and is_anomaly.any():
             ax.fill_between(t_axis, 0, max_val * 1.18,
-                            where=amask, color=NASA_RED, alpha=0.2,
-                            label='异常区间 (3σ)')
+                            where=is_anomaly, color=NASA_RED, alpha=0.2,
+                            label='异常区间')
         ax.plot(t_axis, actual, color=DATA_CYAN,  lw=2.0, label='传感器实测')
         ax.plot(t_axis, pred,   color=DATA_AMBER, lw=1.4, ls='--', label='AI 预测基准')
         if ax is axes_tel[2]:
@@ -1034,42 +916,22 @@ if uploaded_file is not None:
     # ── 异常检测 ──
     section_header("异常检测与残差监控", "ANOMALY DETECTION")
 
-    # Dynamic thresholds: show sigma-based when available, fallback to hard threshold
-    if has_mc:
-        from inference_utils import THRUST_NOISE_STD as _TNS, MFR_NOISE_STD as _MNS, ISP_NOISE_STD as _INS
-        _ts = np.sqrt(_t_std**2 + _TNS**2) * 3.0
-        _ms = np.sqrt(_m_std**2 + _MNS**2) * 3.0
-        _is = np.sqrt(_i_std**2 + _INS**2) * 3.0
-        thr_label_t = '3σ 动态阈值'
-        thr_label_m = '3σ 动态阈值'
-        thr_label_i = '3σ 动态阈值'
-        thr_line_t = DATA_GREEN
-        thr_line_m = DATA_GREEN
-        thr_line_i = DATA_GREEN
-    else:
-        _ts = np.full(SEQ_LEN, threshold)
-        _ms = np.full(SEQ_LEN, threshold * (MFR_MAX / THRUST_SCALE))
-        _is = np.full(SEQ_LEN, threshold * ISP_THRESHOLD_SCALE)
-        thr_label_t = f'固定阈值 {threshold:.2f} N'
-        thr_label_m = f'固定阈值 {threshold * (MFR_MAX / THRUST_SCALE):.1f} mg/s'
-        thr_label_i = f'固定阈值 {threshold * ISP_THRESHOLD_SCALE:.1f} s'
-        thr_line_t = NASA_RED
-        thr_line_m = NASA_RED
-        thr_line_i = NASA_RED
+    mfr_residuals = np.abs(mfr_pred - actual_mfr)
+    isp_residuals = np.abs(isp - actual_isp)
+    mfr_threshold = threshold * (MFR_MAX / THRUST_SCALE)  # 按量纲缩放阈值
+    isp_threshold = threshold * ISP_THRESHOLD_SCALE
 
     data_rows = [
-        (residuals,     _ts, is_anomaly,     '推力残差 · THRUST',    'N',     STATUS_WARN, thr_label_t, thr_line_t),
-        (mfr_residuals, _ms, mfr_is_anomaly, '质量流量残差 · MASS FLOW RATE', 'mg/s',  DATA_CYAN, thr_label_m, thr_line_m),
-        (isp_residuals, _is, isp_is_anomaly, '比冲残差 · SPECIFIC IMPULSE', 's', DATA_VIOLET, thr_label_i, thr_line_i),
+        (residuals,     threshold,     '推力残差 · THRUST',    'N',     STATUS_WARN),
+        (mfr_residuals, mfr_threshold, '质量流量残差 · MASS FLOW RATE', 'mg/s',  DATA_CYAN),
+        (isp_residuals, isp_threshold, '比冲残差 · SPECIFIC IMPULSE', 's', DATA_VIOLET),
     ]
     fig2, axes_res = plt.subplots(3, 1, figsize=(18, 7.5))
-    for idx, (_res, _thr, _anom, _title, _yl, _clr, _thr_label, _thr_color) in enumerate(data_rows):
+    for idx, (_res, _thr, _title, _yl, _clr) in enumerate(data_rows):
         ax = axes_res[idx]
         ax.plot(t_axis, _res, color=_clr, lw=1.5)
-        if _thr.ndim == 0 or _thr.std() < 1e-6:
-            ax.axhline(_thr[0] if _thr.ndim > 0 else _thr, color=_thr_color, ls='--', lw=1.2, label=_thr_label)
-        else:
-            ax.plot(t_axis, _thr, color=_thr_color, ls='--', lw=1.2, alpha=0.8, label=_thr_label)
+        ax.axhline(_thr, color=NASA_RED, ls='--', lw=1.2, label=f'阈值 {_thr:.2f} {_yl}')
+        _anom = _res > _thr
         if _anom.any():
             ax.fill_between(t_axis, 0, _res, where=_anom, color=NASA_RED, alpha=0.3)
         ax.legend(loc='upper right', fontsize=8)
@@ -1080,26 +942,26 @@ if uploaded_file is not None:
     render_fig(fig2)
 
     # ── 三维异常状态 ──
-    any_anom = is_anomaly.any() or mfr_is_anomaly.any() or isp_is_anomaly.any()
+    mfr_anom = mfr_residuals > mfr_threshold
+    isp_anom = isp_residuals > isp_threshold
+    any_anom = is_anomaly.any() or mfr_anom.any() or isp_anom.any()
 
     if any_anom:
         _parts = []
-        if is_anomaly.any():     _parts.append(f'推力 {int(is_anomaly.sum())}步')
-        if mfr_is_anomaly.any(): _parts.append(f'流量 {int(mfr_is_anomaly.sum())}步')
-        if isp_is_anomaly.any(): _parts.append(f'比冲 {int(isp_is_anomaly.sum())}步')
-        det_method = '3σ 统计检测' if has_mc else f'硬阈值 ({threshold} N)'
+        if is_anomaly.any(): _parts.append(f'推力 {int(is_anomaly.sum())}步')
+        if mfr_anom.any():   _parts.append(f'流量 {int(mfr_anom.sum())}步')
+        if isp_anom.any():   _parts.append(f'比冲 {int(isp_anom.sum())}步')
         st.markdown(f"""
         <div class="status-bar alert">
             <span class="title">▲ 检测到异常</span>
-            {' / '.join(_parts)} 超过阈值 &nbsp;|&nbsp; 检测方法: {det_method}
+            {' / '.join(_parts)} 超过阈值
         </div>
         """, unsafe_allow_html=True)
     else:
-        det_method = '3σ 统计检测' if has_mc else f'硬阈值 ({threshold} N)'
         st.markdown(f"""
         <div class="status-bar nominal">
             <span class="title">● 系统运行正常</span>
-            推力 · 流量 · 比冲 三维残差均在阈值范围内 &nbsp;|&nbsp; 检测方法: {det_method}
+            推力 · 流量 · 比冲 三维残差均在阈值范围内
         </div>
         """, unsafe_allow_html=True)
 
@@ -1107,58 +969,30 @@ if uploaded_file is not None:
     if generate_report:
         section_header("健康诊断报告", "DIAGNOSTIC REPORT")
         with st.spinner("正在生成诊断报告..."):
-            report = generate_health_report(
-                thrust_pred, mfr_pred, isp,
-                actual_thrust, actual_mfr, actual_isp,
-                thrust_std=_t_std, mfr_std=_m_std, isp_std=_i_std,
-                model_confidence=model_conf)
+            report = generate_health_report(thrust_pred, mfr_pred, isp,
+                                            is_anomaly=is_anomaly,
+                                            residual_rms=residual_rms)
 
+        pa      = report.get('prediction_accuracy', {})
+        anom    = report.get('anomaly_status', {})
         overall = report['overall_health']
+        if model_conf >= CONF_THRESHOLD_GOOD:
+            conf_level = 'good'
+        elif model_conf >= CONF_THRESHOLD_WARN:
+            conf_level = 'warning'
+        else:
+            conf_level = 'critical'
 
         def _bar(s):
-            return f'<span class="score-bar"><span class="score-fill" style="width:{max(0,min(100,s))}%"></span></span>'
+            return f'<span class="score-bar"><span class="score-fill" style="width:{s}%"></span></span>'
         def _badge(lv):
-            cls = 'level-good' if lv in ('good','stable','nominal') else \
-                  'level-warning' if lv in ('warning','mild','partial','scattered') else \
-                  'level-critical'
-            return f'<span class="{cls}">● {lv.upper()}</span>'
-        def _drift_badge(lv):
-            if lv == 'stable': return '<span style="color:#2EE686;">▬ 稳定</span>'
-            if lv == 'mild': return '<span style="color:#FFC940;">↗ 轻微漂移</span>'
-            if lv == 'noticeable': return '<span style="color:#FF8A4D;">↗ 明显漂移</span>'
-            return '<span style="color:#FF4D2E;">↗ 严重漂移</span>'
+            return f'<span class="level-{lv}">● {lv.upper()}</span>'
 
-        dims = ['thrust', 'mfr', 'isp']
-        dim_labels_cn = ['推力', '质量流量', '比冲']
-        dim_units = ['N', 'mg/s', 's']
+        anom_ratio_pct = anom.get('anomaly_ratio', 0) * 100
+        anom_level     = anom.get('level', 'normal')
+        anom_score     = max(0, min(100, 100 - anom_ratio_pct / 20 * 100))
 
-        rows_html = ''
-        for d, cn, u in zip(dims, dim_labels_cn, dim_units):
-            dd = report[d]
-            rows_html += f"""
-            <tr>
-                <td><b>{cn}</b> <span style="font-size:10px;color:{TEXT_DIM};">{d.upper()}</span></td>
-                <td>RMS={dd['rms']:.4f} {u} | 异常 {dd['n_anomaly']}/{dd['total_steps']}步 ({dd['anomaly_ratio']*100:.1f}%)</td>
-                <td>{_bar(dd['accuracy'])} {dd['accuracy']}/100</td>
-                <td>{_badge(_health_level(dd['accuracy']))}</td>
-            </tr>
-            <tr>
-                <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 异常评分</span></td>
-                <td><span style="font-size:11px;color:{TEXT_DIM};">检测方法: {'3σ 统计' if has_mc else '硬阈值'} | 漂移: {_drift_badge(dd['drift_level'])}</span></td>
-                <td>{_bar(dd['anomaly'])} {dd['anomaly']}/100</td>
-                <td>{_badge(_health_level(dd['anomaly']))}</td>
-            </tr>
-            <tr>
-                <td><span style="padding-left:16px;color:{TEXT_DIM};">↳ 维度综合</span></td>
-                <td><span style="font-size:11px;color:{TEXT_DIM};">0.5×精度 + 0.5×异常</span></td>
-                <td><b>{_bar(dd['dim_score'])} {dd['dim_score']}/100</b></td>
-                <td>{_badge(_health_level(dd['dim_score']))}</td>
-            </tr>"""
-
-        cons = report['consistency']
-        mc = report['model_confidence']
-
-        report_html = f"""
+        st.markdown(f"""
         <div class="report-card">
             <div class="report-summary">
                 <span class="score">{overall}/100</span> 综合健康评分
@@ -1167,66 +1001,34 @@ if uploaded_file is not None:
             </div>
             <table class="report-table">
                 <thead>
-                    <tr><th style="width:20%;">评估维度</th><th style="width:32%;">指标</th><th style="width:23%;">评分</th><th style="width:25%;">状态</th></tr>
+                    <tr><th style="width:22%;">评估维度</th><th style="width:28%;">指标</th><th style="width:25%;">评分</th><th style="width:25%;">状态</th></tr>
                 </thead>
                 <tbody>
-                    {rows_html}
-                    <tr style="border-top:1px solid {BORDER};">
-                        <td><b>三维一致性</b></td>
-                        <td>{cons['detail']}<br><span style="font-size:11px;color:{TEXT_DIM};">Jaccard = 异常交集/并集，衡量多维度异常关联程度</span></td>
-                        <td>{_bar(cons['score'])} {cons['score']}/100</td>
-                        <td>{_badge(cons['level'])}</td>
-                    </tr>
-                    <tr>
-                        <td><b>模型置信度</b></td>
-                        <td>MC Dropout x20 变异系数<br><span style="font-size:11px;color:{TEXT_DIM};">反映模型对当前输入的确定性</span></td>
-                        <td>{_bar(mc['score'])} {mc['score']}/100</td>
-                        <td>{_badge(mc['level'])}</td>
-                    </tr>
-                    <tr>
-                        <td><b>漂移检测</b></td>
-                        <td colspan="2" style="font-size:13px;">{report['drift_summary']}</td>
-                        <td>{'<span style="color:#2EE686;">STABLE</span>' if report['drift_summary'] == '无显著漂移' else '<span style="color:#FF8A4D;">DRIFT</span>'}</td>
+                    <tr><td>预测精度</td><td>残差 RMS = {residual_rms:.4f} N</td><td>{_bar(pa.get('score',0))} {pa.get('score',0)}/100</td><td>{_badge(pa.get('level','normal'))}</td></tr>
+                    <tr><td>异常检测</td><td>{anom.get('n_anomaly',0)} / {anom.get('total_steps',200)} 步 ({anom_ratio_pct:.1f}%)</td><td>{_bar(int(anom_score))} {int(anom_score)}/100</td><td>{_badge(anom_level)}</td></tr>
+                    <tr><td>模型置信度</td><td>MC Dropout 采样 20 次的变异系数<br><span style="font-size:11px;color:{TEXT_DIM};">反映模型对当前输入的确定性，数据分布变化时置信度自然降低，不影响预测精度</span></td><td>{_bar(model_conf)} {model_conf}/100</td><td>{_badge(conf_level)}</td></tr>
+                    <tr style="border-top:2px solid {BORDER};">
+                        <td colspan="4" style="font-size:11px;color:{TEXT_DIM};padding:14px 8px;line-height:1.7;">
+                            <span style="font-weight:700;color:#E8ECEF;font-size:15px;">▌ 评分规则 Scoring Rules</span><br>
+                            <span style="font-size:15px;line-height:2.2;color:#C8D0E0;">
+                            <b style="color:#FFB627;">① 预测精度</b> &nbsp;&nbsp;
+                            r = RMS / RMSE₀ · (RMSE₀ = 0.0832 N)<br>
+                            <span style="padding-left:2em;">
+                            Score = {{ 100, r ≤ 1.5 &nbsp;|&nbsp; 80 − 40(r−1.5)/1.5, 1.5 < r ≤ 3 &nbsp;|&nbsp; 40 − 30(r−3)/2, 3 < r ≤ 5 &nbsp;|&nbsp; 10, r > 5 }}
+                            </span><br>
+                            <b style="color:#FFB627;">② 异常检测</b> &nbsp;&nbsp;
+                            a = anomaly_ratio &nbsp; → &nbsp; Score = max(0, 100 − 500a)<br>
+                            <b style="color:#FFB627;">③ 模型置信度</b> &nbsp;&nbsp;
+                            c = σ/μ &nbsp; (MC Dropout ×20) &nbsp; → &nbsp;
+                            Score = {{ 98, c < 0.03 &nbsp;|&nbsp; 85, c < 0.08 &nbsp;|&nbsp; 65, c < 0.15 &nbsp;|&nbsp; 40, c < 0.30 &nbsp;|&nbsp; 20, c ≥ 0.30 }}<br>
+                            <b style="color:#FC3D21;font-size:15px;">Overall = 0.4 · S<sub>pred</sub> + 0.3 · S<sub>anom</sub> + 0.3 · S<sub>conf</sub></b>
+                            </span>
+                        </td>
                     </tr>
                 </tbody>
             </table>
-        </div>"""
-        st.html(report_html)
-
-        # ── 评分规则 (LaTeX) ──
-        with st.expander("评分规则 Scoring Rules", expanded=False):
-            st.latex(r"""
-            \text{【1】精度评分（每维）}\\[6pt]
-            S_{\rm acc} = f(r), \quad r = \frac{\mathrm{RMS_{dim}}}{\mathrm{RMSE_{ref}}}\\[6pt]
-            f(r) = \begin{cases}
-            100, & r \leq 1 \\[2pt]
-            70 + 30\cdot\frac{1.5-r}{0.5}, & 1 < r \leq 1.5 \\[2pt]
-            40 + 30\cdot\frac{2.5-r}{1.0}, & 1.5 < r \leq 2.5 \\[2pt]
-            15 + 25\cdot\frac{4.0-r}{1.5}, & 2.5 < r \leq 4.0 \\[2pt]
-            5 + 10\cdot\frac{8.0-r}{4.0}, & 4.0 < r \leq 8.0 \\[2pt]
-            5, & r > 8.0
-            \end{cases}
-            """)
-            st.latex(r"""
-            \text{【2】异常评分（每维）}\\[6pt]
-            S_{\rm anom} = 100 \cdot e^{-10a}, \quad
-            a = \frac{n_{\rm anom}}{n_{\rm total}}\\[6pt]
-            \text{检测：}\ |y_{\rm pred}-y_{\rm actual}| > 3\sqrt{\sigma^2_{\rm mc} + \sigma^2_{\rm noise}}
-            """)
-            st.latex(r"""
-            \text{【3】维度综合}\\[6pt]
-            S_{\rm dim} = 0.5 \cdot S_{\rm acc} + 0.5 \cdot S_{\rm anom}
-            """)
-            st.latex(r"""
-            \text{【4】三维一致性}\\[6pt]
-            J = \frac{|T \cap M \cap I|}{|T \cup M \cup I|}\\[6pt]
-            \text{高 } J \Rightarrow \text{真实故障；低 } J \Rightarrow \text{传感器噪声}
-            """)
-            st.latex(r"""
-            \text{【5】综合评分}\\[6pt]
-            S_{\rm overall} = \mathrm{mean}(S_T, S_M, S_I) \times
-            \bigl[\,0.85 + 0.15 \times (1 - J)\,\bigr]
-            """)
+        </div>
+        """, unsafe_allow_html=True)
 
 else:
     st.markdown(f"""
