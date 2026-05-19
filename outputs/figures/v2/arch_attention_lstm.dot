@@ -1,0 +1,68 @@
+// Attention-LSTM 架构图 — 推进器数字孪生
+digraph AttentionLSTM {
+    rankdir=TB;
+    splines=polyline;
+    nodesep=0.28;
+    ranksep=0.22;
+    compound=true;
+    fontname="Noto Sans SC";
+    fontsize=10;
+    bgcolor="white";
+    label="Attention-LSTM 架构: 时序编码 → 注意力聚合 → 回归解码";
+    pad=0.20;
+    dpi=300;
+    newrank=true;
+
+    node [fontname="Noto Sans SC", fontsize=8, shape=box, style="rounded,filled", penwidth=0.6, margin="0.05,0.04"];
+    edge [fontname="Noto Sans SC", fontsize=7, color="#556270", penwidth=0.9];
+
+    // ── 阶段一 ──
+    subgraph cluster_s1 {
+        label="阶段一  时序编码"; style="rounded,filled"; fillcolor="#EDF1F7"; color="#8FA4BE";
+        penwidth=1.0; fontname="Noto Sans SC"; fontsize=9; margin=9;
+
+        input [label="输入 [B×T×17] (6动态+11独热)", fillcolor="#E8EDF2", color="#90A4AE", width=2.8];
+        lstm  [label="双层LSTM (17→256→256)  →  隐状态 [B×T×256]", fillcolor="#CDDAF0", color="#7B9BC2", width=2.8];
+        input -> lstm [label=" [B,T,17] ", fontcolor="#607D8B"];
+    }
+
+    // ── 阶段二 ──
+    subgraph cluster_s2 {
+        label="阶段二  注意力聚合"; style="rounded,filled"; fillcolor="#EDF5F2"; color="#7FADA0";
+        penwidth=1.0; fontname="Noto Sans SC"; fontsize=9; margin=9;
+
+        mha [label="多头自注意力 (4头, dk=64)  Q=K=V=LSTM_out  →  [B×T×256]", fillcolor="#C5E0D8", color="#6BAA9A", width=3.2];
+        add [label="残差连接  out ⊕ attn_out  →  [B×T×256]", shape=box, style="rounded,filled", fillcolor="#DAEBE6", color="#7FADA0", width=3.2];
+        ln  [label="层归一化 (256维)  →  [B×T×256]", shape=box, style="rounded,filled", fillcolor="#DAEBE6", color="#7FADA0", width=3.2];
+
+        mha -> add [label=" [B,T,256] ", fontcolor="#607D8B"];
+        add -> ln  [label=" [B,T,256] ", fontcolor="#607D8B"];
+    }
+
+    // ── 阶段三 ──
+    subgraph cluster_s3 {
+        label="阶段三  回归解码"; style="rounded,filled"; fillcolor="#FBF6EE"; color="#D4B896";
+        penwidth=1.0; fontname="Noto Sans SC"; fontsize=9; margin=9;
+
+        fc1 [label="FC+ReLU (256→128)  →  [B×T×128]", fillcolor="#F2E2CC", color="#C9A87C", width=2.8];
+        do  [label="Dropout (p=0.05)  →  [B×T×128]", fillcolor="#F2E2CC", color="#C9A87C", width=2.8];
+        fc2 [label="输出层 (128→2)  →  [B×T×2]", fillcolor="#F0DCC4", color="#C1955A", width=2.8];
+
+        fc1 -> do  [label=" [B,T,128] ", fontcolor="#607D8B"];
+        do  -> fc2 [label=" [B,T,128] ", fontcolor="#607D8B"];
+    }
+
+    // ── 输出 + 指标 ──
+    output [label="双目标预测输出: 推力(×8.0→N) | 流量(×2000→mg/s) | 比冲(在线推导)  [B×T×2]",
+        shape=box, style="rounded,filled", fillcolor="#F5EDE0", color="#C9A87C", width=5.0];
+
+    loss [label="加权MSE损失: 0.7×MSE(thrust) + 0.3×MSE(mfr)  |  RMSE: 推力 0.083N, 流量 49.1mg/s  |  ~90万参数",
+        shape=box, style="rounded,dashed,filled", fillcolor="#FFF8F0", color="#D4A76A", fontsize=8, width=5.0];
+
+    // ── 跨阶段连接 ──
+    lstm -> mha  [label="  [B,T,256]  ", fontcolor="#607D8B"];
+    lstm -> add  [label="  跳跃连接  ", fontcolor="#90A4AE", style="dotted", penwidth=0.8, constraint=false];
+    ln   -> fc1  [label="  [B,T,256]  ", fontcolor="#607D8B"];
+    fc2  -> output [label="  [B,T,2]  ", fontcolor="#607D8B"];
+    output -> loss [label="  训练  ", fontcolor="#C9A87C", style="dashed", penwidth=0.7];
+}
